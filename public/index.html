@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Camera</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <span class="dot" id="live-dot"></span>
+        <div>
+          <h1>Box camera</h1>
+          <p id="status">Connecting</p>
+        </div>
+      </div>
+      <nav>
+        <a id="btn-live" href="/live">Live</a>
+        <a id="btn-clip" href="/clip">Clip</a>
+      </nav>
+    </header>
+
+    <main>
+      <form id="clip-form" hidden>
+        <label>
+          Start
+          <input id="start" type="datetime-local" step="1" required />
+        </label>
+        <label>
+          End
+          <input id="end" type="datetime-local" step="1" required />
+        </label>
+        <button type="submit">Play clip</button>
+        <button type="button" id="btn-save">Save clip</button>
+      </form>
+
+      <section class="player">
+        <img id="view" alt="camera view" />
+        <div class="player-bar">
+          <span id="mode-label">Live</span>
+          <a id="raw-link" href="/stream" target="_blank" rel="noreferrer">Open /stream</a>
+        </div>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
