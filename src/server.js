@@ -3,12 +3,15 @@ import { stream, audioStream, sampleRateFromQuery } from "../utils/livestream.js
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { clipStream, clipAudio, saveClip } from "../utils/clips.js";
+import { listFaces } from "../utils/faces.js";
+import { startSavingFaces } from "../utils/fetch_faces.js";
 
 const PORT = 3000;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "..", "public");
 const dataDir = path.join(__dirname, "..", "data");
 const clipsDir = path.join(dataDir, "clips");
+const faceDataDir = path.join(__dirname, "..", "face_data");
 const rtspUrl = process.env.CAMERA_RTSP_URL;
 
 /* For face detection clip saving
@@ -37,10 +40,15 @@ app.get("/stream-audio", (req, res) => {
   audioStream(req, res, rtspUrl, { sampleRate: sampleRateFromQuery(req) });
 });
 
+app.get("/api/faces", (_req, res) => {
+  res.json(listFaces(faceDataDir));
+});
+
 app.use("/clips", express.static(clipsDir));
+app.use("/face-data", express.static(faceDataDir));
 app.use(express.static(publicDir));
 
-app.get(["/live", "/clip"], (_req, res) => {
+app.get(["/live", "/clip", "/faces"], (_req, res) => {
   res.sendFile(path.join(publicDir, "index.html"));
 });
 
@@ -79,4 +87,5 @@ app.get("/save-clip", async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Open http://localhost:${PORT}`);
+  startSavingFaces(faceDataDir);
 });
