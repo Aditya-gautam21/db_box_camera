@@ -28,6 +28,7 @@
         <a id="btn-live" href="/live">Live</a>
         <a id="btn-clip" href="/clip">Clip</a>
         <a id="btn-faces" href="/faces">Faces</a>
+        <a id="btn-groups" href="/groups">Groups</a>
       </nav>
     </header>
 
@@ -41,9 +42,15 @@
           End
           <input id="end" type="datetime-local" step="1" required />
         </label>
+        <div class="clip-presets">
+          <button type="button" id="clip-5" class="preset">Last 5 min</button>
+          <button type="button" id="clip-15" class="preset">Last 15 min</button>
+        </div>
         <button type="submit">Play clip</button>
         <button type="button" id="btn-save">Save clip</button>
       </form>
+
+      <section id="live-dash" hidden></section>
 
       <section class="player" id="player">
         <div class="stage">
@@ -52,6 +59,7 @@
         <div class="player-bar">
           <div class="transport" id="transport" hidden>
             <button type="button" id="btn-play" class="ctrl-play">Pause</button>
+            <button type="button" id="btn-mute" class="ctrl-mute" aria-pressed="false">Mute</button>
             <button type="button" id="btn-back" class="seek-only">−10s</button>
             <input id="seek" class="seek-only" type="range" min="0" max="1000" value="0" />
             <button type="button" id="btn-fwd" class="seek-only">+10s</button>
@@ -68,14 +76,112 @@
       <section id="faces-gallery" hidden>
         <div class="gallery-head">
           <div>
-            <p class="kicker">Archive</p>
+            <p class="kicker">Camera</p>
             <h2>Snapshots</h2>
           </div>
-          <p id="faces-empty">Loading snapshots…</p>
+          <div class="faces-head-tools">
+            <p id="faces-empty">Loading snapshots…</p>
+            <div class="face-pager">
+              <button type="button" id="btn-faces-prev" class="icon-btn" aria-label="Previous">‹</button>
+              <span id="faces-page">0 / 0</span>
+              <button type="button" id="btn-faces-next" class="icon-btn" aria-label="Next">›</button>
+            </div>
+          </div>
         </div>
         <div id="faces-grid"></div>
       </section>
+
+      <section id="groups-page" hidden>
+        <div class="gallery-head">
+          <div>
+            <p class="kicker">Library</p>
+            <h2>Groups</h2>
+          </div>
+        </div>
+        <p id="groups-empty">Loading groups…</p>
+        <div class="groups-table-wrap">
+          <table class="groups-table">
+            <tbody id="groups-list"></tbody>
+          </table>
+        </div>
+        <div class="groups-actions">
+          <button id="btn-add-group">Add Group</button>
+          <button id="btn-save-groups">Save</button>
+          <button type="button" id="btn-refresh-groups">Refresh</button>
+        </div>
+      </section>
     </main>
+
+    <dialog id="group-modal" class="face-modal">
+      <div class="face-modal-head">
+        <h3 id="group-modal-title">Group</h3>
+        <button type="button" id="btn-close-modal" class="icon-btn" aria-label="Close">×</button>
+      </div>
+      <div class="face-modal-body">
+        <div class="face-preview">
+          <div class="face-preview-stage">
+            <img id="edit-face-img" alt="" />
+            <p id="edit-face-empty" class="muted">No photos yet</p>
+          </div>
+          <div class="face-pager">
+            <button type="button" id="btn-face-prev" class="icon-btn" aria-label="Previous">‹</button>
+            <span id="edit-face-page">0 / 0</span>
+            <button type="button" id="btn-face-next" class="icon-btn" aria-label="Next">›</button>
+          </div>
+        </div>
+        <form id="face-info-form" class="face-info">
+          <label>Name <input id="edit-face-name" type="text" autocomplete="off" /></label>
+          <label>
+            Gender
+            <select id="edit-face-gender">
+              <option value="0">Unknown</option>
+              <option value="1">Male</option>
+              <option value="2">Female</option>
+            </select>
+          </label>
+          <label>Age <input id="edit-face-age" type="number" min="0" max="120" /></label>
+          <label>Country <input id="edit-face-country" type="text" autocomplete="off" /></label>
+          <label>Nation <input id="edit-face-nation" type="text" autocomplete="off" /></label>
+          <label>Native Position <input id="edit-face-native" type="text" autocomplete="off" /></label>
+          <label>Id Code <input id="edit-face-idcode" type="text" autocomplete="off" /></label>
+          <label>Occupation <input id="edit-face-job" type="text" autocomplete="off" /></label>
+          <label>Phone <input id="edit-face-phone" type="text" autocomplete="off" /></label>
+          <label>Email <input id="edit-face-email" type="email" autocomplete="off" /></label>
+          <label>Residence <input id="edit-face-domicile" type="text" autocomplete="off" /></label>
+          <label>Remark <input id="edit-face-remark" type="text" autocomplete="off" /></label>
+        </form>
+      </div>
+      <div class="face-modal-actions">
+        <button type="button" id="btn-import-face">Import</button>
+        <button type="button" id="btn-delete-face">Delete</button>
+      </div>
+    </dialog>
+
+    <dialog id="import-modal" class="import-modal">
+      <button type="button" id="btn-import-capture">Capture Image</button>
+      <button type="button" id="btn-import-local">Local Image</button>
+      <button type="button" id="btn-import-cancel">Cancel</button>
+    </dialog>
+
+    <dialog id="snaps-modal" class="snaps-modal">
+      <div class="group-modal-head">
+        <h3>Captured snapshots</h3>
+        <button type="button" id="btn-close-snaps" class="icon-btn" aria-label="Close">×</button>
+      </div>
+      <div class="snaps-modal-body">
+        <p id="modal-snaps-empty" class="muted">Loading snapshots…</p>
+        <div id="modal-snaps-grid"></div>
+      </div>
+      <div class="face-modal-actions snaps-footer">
+        <div class="face-pager">
+          <button type="button" id="btn-snaps-prev" class="icon-btn" aria-label="Previous">‹</button>
+          <span id="snaps-page">0 / 0</span>
+          <button type="button" id="btn-snaps-next" class="icon-btn" aria-label="Next">›</button>
+        </div>
+        <button type="button" id="btn-add-snaps">Add selected</button>
+      </div>
+    </dialog>
+    <input id="face-file" type="file" accept="image/*" multiple hidden />
     <script src="/app.js"></script>
   </body>
 </html>

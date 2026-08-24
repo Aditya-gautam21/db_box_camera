@@ -8,7 +8,7 @@ export async function groupMap(session) {
     GroupsId: [],
   });
   const map = new Map();
-  for (const g of res.data.Group) {
+  for (const g of res.data?.Group ?? []) {
     map.set(g.Id, g.Name);
   }
   return map;

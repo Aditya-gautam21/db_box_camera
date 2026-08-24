@@ -2,6 +2,15 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
 import { stream, audioStream } from "./livestream.js";
+import { env } from "./camera_session.js";
+
+function camAuth() {
+  return {
+    username: env("CAMERA_USERNAME"),
+    password: env("CAMERA_PASSWORD"),
+    hostname: env("CAMERA_HOSTNAME"),
+  };
+}
 
 export function playbackUri({ username, password, hostname, start, end }) {
   const q = new URLSearchParams({
@@ -33,9 +42,7 @@ export function fetchFaceClip(evt, outDir) {
     `face-${t.toISOString().replaceAll(":", "")}.mp4`
   );
   const uri = playbackUri({
-    username: process.env.CAMERA_USERNAME,
-    password: process.env.CAMERA_PASSWORD,
-    hostname: process.env.CAMERA_HOSTNAME,
+    ...camAuth(),
     start,
     end,
   });
@@ -86,9 +93,7 @@ export function clipAudio(req, res, start, end, sampleRate) {
 
 function playbackUrl(start, end) {
   return playbackUri({
-    username: process.env.CAMERA_USERNAME,
-    password: process.env.CAMERA_PASSWORD,
-    hostname: process.env.CAMERA_HOSTNAME,
+    ...camAuth(),
     start,
     end,
   });
@@ -99,9 +104,7 @@ export function saveClip({ start, end, outDir }) {
   const stamp = String(start).replaceAll(":", "").replaceAll("T", "-");
   const outFile = path.join(outDir, `clip-${stamp}.mp4`);
   const clipUrl = playbackUri({
-    username: process.env.CAMERA_USERNAME,
-    password: process.env.CAMERA_PASSWORD,
-    hostname: process.env.CAMERA_HOSTNAME,
+    ...camAuth(),
     start,
     end,
   });

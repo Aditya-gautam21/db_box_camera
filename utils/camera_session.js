@@ -7,8 +7,9 @@ import path from "node:path";
 const execFileAsync = promisify(execFile);
 const curlBin = "/usr/bin/curl";
 
-function env(name) {
-    return String(process.env[name] ?? "").replaceAll('"', "");
+export function env(name) {
+    const raw = process.env[name] ?? process.env[`ENG_${name}`] ?? "";
+    return String(raw).replaceAll('"', "");
 }
 
 function parseCookie(hdr) {
@@ -101,4 +102,11 @@ export function createSession() {
     }
 
     return { login, post, heartbeat };
+}
+
+let shared;
+
+export function getSession() {
+    if (!shared) shared = createSession();
+    return shared;
 }
