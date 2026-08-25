@@ -779,7 +779,8 @@ button[type="button"] {
 }
 
 #faces-gallery {
-  --face-cols: 5;
+  --face-cols: 6;
+  --face-rows: 2;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -1329,10 +1330,6 @@ body[data-page="faces"] #raw-link {
     grid-template-columns: 1fr 1fr;
   }
 
-  #faces-gallery {
-    --face-cols: 4;
-  }
-
   .snaps-modal {
     width: min(920px, calc(100vw - 1.5rem));
     height: min(70dvh, 580px);
@@ -1406,7 +1403,6 @@ body[data-page="faces"] #raw-link {
 
   #faces-gallery {
     padding: 1.5rem 1rem 1.25rem;
-    --face-cols: 3;
   }
 
   .snaps-modal {

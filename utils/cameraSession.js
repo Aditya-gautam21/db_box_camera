@@ -81,22 +81,26 @@ export function createSession(cam) {
     csrf = parseCsrf(hdr);
   }
 
-  async function post(apiPath, data, retries = 1) {
+  async function postNow(apiPath, data, retries = 1) {
     if (!cookie) await login();
     try {
-      const { stdout } = await execFileAsync(curlBin, [
-        "-k",
-        "--tls-max", "1.2",
-        "--http1.1",
-        "-sS",
-        "-H", "Content-Type: application/json",
-        "-H", "Connection: close",
-        "-H", `Cookie: session_443=${cookie}`,
-        "-H", `X-csrftoken: ${csrf}`,
-        "--data-raw",
-        JSON.stringify({ version: "1.0", data }),
-        `https://${auth.host}${apiPath}`,
-      ]);
+      const { stdout } = await execFileAsync(
+        curlBin,
+        [
+          "-k",
+          "--tls-max", "1.2",
+          "--http1.1",
+          "-sS",
+          "-H", "Content-Type: application/json",
+          "-H", "Connection: close",
+          "-H", `Cookie: session_443=${cookie}`,
+          "-H", `X-csrftoken: ${csrf}`,
+          "--data-raw",
+          JSON.stringify({ version: "1.0", data }),
+          `https://${auth.host}${apiPath}`,
+        ],
+        { maxBuffer: 32 * 1024 * 1024 },
+      );
       const json = JSON.parse(stdout);
       if (json.error_code === "no_login") {
         throw new Error("no_login");
@@ -107,8 +111,16 @@ export function createSession(cam) {
       cookie = "";
       csrf = "";
       await login();
-      return post(apiPath, data, retries - 1);
+      return postNow(apiPath, data, retries - 1);
     }
+  }
+
+  let queue = Promise.resolve();
+  function post(apiPath, data, retries = 1) {
+    const run = () => postNow(apiPath, data, retries);
+    const next = queue.then(run, run);
+    queue = next.then(() => {}, () => {});
+    return next;
   }
 
   return { id: auth.id, login, post };

@@ -1,5 +1,5 @@
 import { getSession } from "./cameraSession.js";
-import { assignGroupsToFaces, groupIdsForUuids, groupMap, recentGroupStats } from "./groupData.js";
+import { groupMap } from "./groupData.js";
 
 const nameCache = new Map();
 const MAX_PAGE = 40;
@@ -43,12 +43,87 @@ function cameraStamp(unixSec) {
 
 const jpegCache = new Map();
 const JPEG_CACHE_MAX = 250;
+const searchCache = new Map();
+const SEARCH_TTL_MS = 8000;
+const pageCache = new Map();
+const pageInflight = new Map();
+const PAGE_CACHE_TTL_MS = 8000;
+const PAGE_CACHE_MAX = 8;
+let groupMapCache = { camId: "", at: 0, map: null };
+const GROUP_MAP_TTL_MS = 30000;
 
-function cacheJpeg(uuid, buf) {
-  jpegCache.set(uuid, buf);
+function cacheJpeg(key, buf) {
+  jpegCache.set(key, buf);
   if (jpegCache.size <= JPEG_CACHE_MAX) return;
   const first = jpegCache.keys().next().value;
   jpegCache.delete(first);
+}
+
+function jpegDataUrl(b64) {
+  if (!b64) return null;
+  const raw = String(b64);
+  if (raw.startsWith("data:")) return raw;
+  return `data:image/jpeg;base64,${raw}`;
+}
+
+function rememberFaceJpeg(camId, uuid, b64) {
+  if (!uuid || !b64) return null;
+  const raw = String(b64).replace(/^data:image\/\w+;base64,/, "");
+  cacheJpeg(`${camId}:${uuid}`, Buffer.from(raw, "base64"));
+  return jpegDataUrl(b64);
+}
+
+async function cachedGroupMap(session) {
+  if (
+    groupMapCache.map &&
+    groupMapCache.camId === session.id &&
+    Date.now() - groupMapCache.at < GROUP_MAP_TTL_MS
+  ) {
+    return groupMapCache.map;
+  }
+  const map = await groupMap(session);
+  groupMapCache = { camId: session.id, at: Date.now(), map };
+  return map;
+}
+
+function cachePage(key, result) {
+  pageCache.set(key, { at: Date.now(), result });
+  if (pageCache.size <= PAGE_CACHE_MAX) return;
+  pageCache.delete(pageCache.keys().next().value);
+}
+
+async function searchTotal(session, body, fresh) {
+  const key = `${session.id}:${JSON.stringify(body)}`;
+  const hit = searchCache.get(key);
+  if (!fresh && hit && Date.now() - hit.at < SEARCH_TTL_MS) return hit.total;
+  const search = await session.post("/API/AI/SnapedFaces/Search", body);
+  const total = search.data?.Count ?? 0;
+  searchCache.set(key, { total, at: Date.now() });
+  return total;
+}
+
+async function fillMissingJpegs(session, rows) {
+  const missing = rows.filter((row) => row.UUId && !row.FaceImage).map((row) => row.UUId);
+  const chunk = 4;
+  for (let i = 0; i < missing.length; i += chunk) {
+    const uuids = missing.slice(i, i + chunk);
+    const res = await session.post("/API/AI/SnapedFaces/GetById", {
+      MsgId: "",
+      Engine: 1,
+      UUIds: uuids,
+      WithFaceImage: 1,
+      WithBodyImage: 0,
+      WithBackgroud: 0,
+      WithFeature: 0,
+    });
+    const byId = new Map();
+    for (const row of res.data?.SnapedFaceInfo ?? []) {
+      if (row.UUId && row.FaceImage) byId.set(row.UUId, row.FaceImage);
+    }
+    for (const row of rows) {
+      if (!row.FaceImage) row.FaceImage = byId.get(row.UUId);
+    }
+  }
 }
 
 function groupIdFromRow(row) {
@@ -80,6 +155,7 @@ export async function listSnappedFaces({
   start,
   end,
   names,
+  fresh,
   gender,
   age,
   glasses,
@@ -89,7 +165,7 @@ export async function listSnappedFaces({
   const session = await getSession(cam);
   const camId = session.id;
   const date = today();
-  const search = await session.post("/API/AI/SnapedFaces/Search", {
+  const searchBody = {
     MsgId: "",
     StartTime: `${date} 00:00:00`,
     EndTime: `${date} 23:59:59`,
@@ -104,95 +180,94 @@ export async function listSnappedFaces({
     Similarity: 0,
     Engine: 1,
     Count: 0,
-  });
-  const total = search.data?.Count ?? 0;
+  };
+  const total = await searchTotal(session, searchBody, fresh === true || fresh === "1");
   if (!total) return { faces: [], total: 0 };
 
   const { startIndex, count } = pageRange({ offset, limit, start, end }, total);
   if (!count) return { faces: [], total };
 
-  const page = await session.post("/API/AI/SnapedFaces/GetByIndex", {
-    MsgId: "",
-    Engine: 1,
-    MatchedFaces: 0,
-    StartIndex: startIndex,
-    Count: count,
-    WithFaceImage: 0,
-    WithBodyImage: 0,
-    WithBackgroud: 0,
-    SimpleInfo: 1,
-    WithFeature: 0,
-    NeedTime: 1,
-  });
-  const faces = [...(page.data?.SnapedFaceInfo ?? [])].reverse();
   const wantNames = names === true || names === "1";
-  if (wantNames) {
-    try {
-      await resolveNames(session, faces, camId);
-    } catch (err) {
-      console.error("face names", err);
-    }
+  const pageKey = `${camId}:${startIndex}:${count}:${wantNames ? 1 : 0}:${JSON.stringify(searchBody)}`;
+  const bypass = fresh === true || fresh === "1";
+  if (!bypass) {
+    const hit = pageCache.get(pageKey);
+    if (hit && Date.now() - hit.at < PAGE_CACHE_TTL_MS) return hit.result;
+    const pending = pageInflight.get(pageKey);
+    if (pending) return pending;
   }
-  return {
-    total,
-    startIndex,
-    count,
-    faces: faces.map((row) => {
-      const uuid = row.UUId;
-      const startTime = row.StartTime ? cameraStamp(row.StartTime) : null;
-      return {
-        uuid,
-        filename: uuid,
-        url: `/api/snaps/${encodeURIComponent(uuid)}?cam=${encodeURIComponent(camId)}`,
-        name: nameCache.get(`${camId}:${uuid}`) || "unknown",
-        start: startTime,
-        end: row.StartTime ? cameraStamp(row.StartTime + 5 * 60) : null,
-      };
-    }),
-  };
+
+  const loading = (async () => {
+    const page = await session.post("/API/AI/SnapedFaces/GetByIndex", {
+      MsgId: "",
+      Engine: 1,
+      MatchedFaces: 0,
+      StartIndex: startIndex,
+      Count: count,
+      WithFaceImage: 0,
+      WithBodyImage: 0,
+      WithBackgroud: 0,
+      SimpleInfo: 0,
+      WithFeature: 0,
+      NeedTime: 1,
+    });
+    const faces = [...(page.data?.SnapedFaceInfo ?? [])].reverse();
+    if (!faces.length) {
+      throw new Error("camera returned no snapshots for this page");
+    }
+    await fillMissingJpegs(session, faces);
+    if (wantNames) {
+      try {
+        await resolveNames(session, faces, camId);
+      } catch (err) {
+        console.error("face names", err);
+      }
+    }
+    const result = {
+      total,
+      startIndex,
+      count,
+      faces: faces.map((row) => {
+        const uuid = row.UUId;
+        const startTime = row.StartTime ? cameraStamp(row.StartTime) : null;
+        const cached = jpegCache.get(`${camId}:${uuid}`);
+        const url =
+          rememberFaceJpeg(camId, uuid, row.FaceImage) ||
+          (cached ? `data:image/jpeg;base64,${cached.toString("base64")}` : `/api/snaps/${encodeURIComponent(uuid)}?cam=${encodeURIComponent(camId)}`);
+        return {
+          uuid,
+          filename: uuid,
+          url,
+          name: nameCache.get(`${camId}:${uuid}`) || "unknown",
+          start: startTime,
+          end: row.StartTime ? cameraStamp(row.StartTime + 5 * 60) : null,
+        };
+      }),
+    };
+    cachePage(pageKey, result);
+    return result;
+  })();
+  if (!bypass) pageInflight.set(pageKey, loading);
+  try {
+    return await loading;
+  } finally {
+    pageInflight.delete(pageKey);
+  }
 }
 
 async function resolveNames(session, rows, camId) {
   const keyOf = (uuid) => `${camId}:${uuid}`;
   const unnamed = rows.filter((row) => row.UUId && !nameCache.has(keyOf(row.UUId)));
   if (!unnamed.length) return;
-  const names = await groupMap(session);
+  const names = await cachedGroupMap(session);
   for (const row of unnamed) {
     const gid = groupIdFromRow(row);
     if (gid != null && names.has(gid)) nameCache.set(keyOf(row.UUId), names.get(gid));
   }
   const leftover = unnamed.filter((row) => !nameCache.has(keyOf(row.UUId)));
-  const unixSec = leftover.find((row) => row.StartTime)?.StartTime;
-  if (leftover.length && unixSec) {
-    const timed = leftover
-      .filter((row) => row.StartTime)
-      .map((row) => ({
-        UUId: row.UUId,
-        StartTime: row.StartTime,
-        EndTime: row.EndTime || row.StartTime + 5,
-      }));
-    if (timed.length) {
-      const stats = await recentGroupStats(session, timed[0].StartTime, timed.length + 8);
-      for (const [uuid, gid] of assignGroupsToFaces(timed, stats)) {
-        if (!nameCache.has(keyOf(uuid))) nameCache.set(keyOf(uuid), names.get(gid) ?? "unknown");
-      }
-    }
-    const still = leftover.filter((row) => !nameCache.has(keyOf(row.UUId)));
-    if (still.length) {
-      const byUuid = await groupIdsForUuids(
-        session,
-        unixSec,
-        still.map((row) => row.UUId),
-        [...names.keys()],
-      );
-      for (const [uuid, gid] of byUuid) {
-        nameCache.set(keyOf(uuid), names.get(gid) ?? "unknown");
-      }
-    }
-  }
   const stranger = names.get(4) || "unknown";
-  for (const row of unnamed) {
-    if (!nameCache.has(keyOf(row.UUId))) nameCache.set(keyOf(row.UUId), stranger);
+  for (const row of leftover) {
+    nameCache.set(keyOf(row.UUId), stranger);
   }
 }
 

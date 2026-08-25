@@ -91,6 +91,7 @@ app.get("/api/faces", asyncRoute(async (req, res) => {
     start,
     end,
     names: req.query.names,
+    fresh: req.query.fresh,
     gender: req.query.gender,
     age: req.query.age,
     glasses: req.query.glasses,
@@ -103,6 +104,7 @@ app.get("/api/faces", asyncRoute(async (req, res) => {
 
 app.get("/api/snaps/:uuid", asyncRoute(async (req, res) => {
   const jpeg = await getSnapJpeg(req.params.uuid, req.query.cam);
+  res.set("Cache-Control", "public, max-age=86400, immutable");
   res.type("jpeg").send(jpeg);
 }));
 

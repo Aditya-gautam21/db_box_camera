@@ -88,7 +88,8 @@ let faceDirty = false;
 let snapPage = 0;
 let snapTotal = 0;
 const SNAP_PAGE_SIZE = 12;
-let facesPageSize = 10;
+let snapFetchId = 0;
+let facesPageSize = 12;
 let facesPage = 0;
 let facesTotal = 0;
 let facesFetchId = 0;
@@ -1111,7 +1112,7 @@ function makeSnapPick(face) {
   const img = document.createElement("img");
   img.src = face.url;
   img.alt = snapCaption(face);
-  img.loading = "lazy";
+  img.decoding = "async";
   const cap = document.createElement("span");
   cap.textContent = snapCaption(face);
   btn.append(img, cap);
@@ -1139,15 +1140,18 @@ function updateSnapPager() {
 }
 
 async function loadCapturedSnaps() {
-  modalSnapsEmpty.hidden = false;
-  modalSnapsEmpty.textContent = "Loading snapshots…";
-  modalSnapsGrid.replaceChildren();
+  const reqId = ++snapFetchId;
+  if (!modalSnapsGrid.childElementCount) {
+    modalSnapsEmpty.hidden = false;
+    modalSnapsEmpty.textContent = "Loading snapshots…";
+  }
   updateSnapPager();
   try {
     const res = await fetch(
       `/api/faces?start=${snapPage * SNAP_PAGE_SIZE}&end=${(snapPage + 1) * SNAP_PAGE_SIZE}&offset=${snapPage * SNAP_PAGE_SIZE}&limit=${SNAP_PAGE_SIZE}${camQuery(snapsCam)}`,
     );
     const data = await res.json();
+    if (reqId !== snapFetchId) return;
     const faces = Array.isArray(data) ? data : data.faces;
     snapTotal = Array.isArray(data) ? data.length : Number(data.total) || 0;
     if (!res.ok || !Array.isArray(faces)) {
@@ -1155,6 +1159,8 @@ async function loadCapturedSnaps() {
       return;
     }
     if (snapTotal === 0) {
+      modalSnapsGrid.replaceChildren();
+      modalSnapsEmpty.hidden = false;
       modalSnapsEmpty.textContent = "No captured snapshots yet";
       updateSnapPager();
       return;
@@ -1164,7 +1170,23 @@ async function loadCapturedSnaps() {
     for (const face of faces) frag.append(makeSnapPick(face));
     modalSnapsGrid.replaceChildren(frag);
     updateSnapPager();
+    const next = snapPage + 1;
+    const prev = snapPage - 1;
+    if (next < snapPageCount()) {
+      fetch(
+        `/api/faces?start=${next * SNAP_PAGE_SIZE}&end=${(next + 1) * SNAP_PAGE_SIZE}&offset=${next * SNAP_PAGE_SIZE}&limit=${SNAP_PAGE_SIZE}${camQuery(snapsCam)}`,
+        { cache: "no-store" },
+      ).catch(() => {});
+    }
+    if (prev >= 0) {
+      fetch(
+        `/api/faces?start=${prev * SNAP_PAGE_SIZE}&end=${(prev + 1) * SNAP_PAGE_SIZE}&offset=${prev * SNAP_PAGE_SIZE}&limit=${SNAP_PAGE_SIZE}${camQuery(snapsCam)}`,
+        { cache: "no-store" },
+      ).catch(() => {});
+    }
   } catch (err) {
+    if (reqId !== snapFetchId) return;
+    modalSnapsEmpty.hidden = false;
     modalSnapsEmpty.textContent = String(err.message || err);
   }
 }
@@ -1199,7 +1221,7 @@ function makeFaceCard(face) {
   const img = document.createElement("img");
   img.src = face.url;
   img.alt = face.name;
-  img.loading = "lazy";
+  img.decoding = "async";
   const cap = document.createElement("span");
   cap.className = "face-cap";
   const name = document.createElement("strong");
@@ -1221,28 +1243,14 @@ function makeFaceCard(face) {
   return btn;
 }
 
-function faceColumnCount() {
-  const raw = getComputedStyle(facesGallery).getPropertyValue("--face-cols");
-  const cols = Number.parseInt(raw, 10);
-  return Number.isFinite(cols) && cols > 0 ? cols : 5;
+function faceGridCount(name, fallback) {
+  const raw = getComputedStyle(facesGallery).getPropertyValue(name);
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 function syncFacesPageSize() {
-  const cols = faceColumnCount();
-  if (facesGallery.hidden) {
-    facesPageSize = cols;
-    return facesPageSize;
-  }
-  const styles = getComputedStyle(facesGrid);
-  const gap = Number.parseFloat(styles.rowGap) || 14;
-  const width = facesGrid.clientWidth;
-  const height = facesGrid.clientHeight;
-  const colW = width > 0 ? (width - gap * Math.max(0, cols - 1)) / cols : 120;
-  const sample = facesGrid.querySelector(".face-card");
-  const cardH = sample ? sample.getBoundingClientRect().height : Math.max(96, colW + 58);
-  const available = height || Math.max(0, window.innerHeight - facesGrid.getBoundingClientRect().top - 24);
-  const rows = Math.max(1, Math.floor((available + gap) / (cardH + gap)));
-  facesPageSize = cols * rows;
+  facesPageSize = faceGridCount("--face-cols", 6) * faceGridCount("--face-rows", 2);
   return facesPageSize;
 }
 
@@ -1304,12 +1312,12 @@ async function showFaces({ push = true } = {}) {
   return loadFaces();
 }
 
-async function fetchFacesPage({ names = true } = {}) {
-  const reqId = ++facesFetchId;
+async function fetchFacesPage({ names = true, track = true, fresh = false } = {}) {
+  const reqId = track ? ++facesFetchId : facesFetchId;
   syncFacesPageSize();
   const start = facesPage * facesPageSize;
   const end = start + facesPageSize;
-  const qs = `/api/faces?start=${start}&end=${end}&offset=${start}&limit=${facesPageSize}${names ? "&names=1" : ""}${camQuery(facesCam)}${facesFilterQuery()}`;
+  const qs = `/api/faces?start=${start}&end=${end}&offset=${start}&limit=${facesPageSize}${names ? "&names=1" : ""}${fresh ? "&fresh=1" : ""}${camQuery(facesCam)}${facesFilterQuery()}`;
   const res = await fetch(qs, { cache: "no-store" });
   const data = await res.json();
   const faces = Array.isArray(data) ? data : data.faces;
@@ -1317,11 +1325,23 @@ async function fetchFacesPage({ names = true } = {}) {
   return { reqId, res, data, faces, total };
 }
 
+function prefetchFacePage(page) {
+  if (page < 0 || (facesTotal && page >= facesPageCount())) return;
+  const start = page * facesPageSize;
+  const end = start + facesPageSize;
+  fetch(
+    `/api/faces?start=${start}&end=${end}&offset=${start}&limit=${facesPageSize}&names=1${camQuery(facesCam)}${facesFilterQuery()}`,
+    { cache: "no-store" },
+  ).catch(() => {});
+}
+
 async function loadFaces() {
   stopFacesPoll();
   const limit = syncFacesPageSize();
-  facesEmpty.hidden = false;
-  facesEmpty.textContent = "Loading snapshots…";
+  if (!facesGrid.childElementCount) {
+    facesEmpty.hidden = false;
+    facesEmpty.textContent = "Loading snapshots…";
+  }
   updateFacesPager();
   try {
     const { reqId, res, data, faces, total } = await fetchFacesPage({ names: true });
@@ -1332,25 +1352,35 @@ async function loadFaces() {
       return loadFaces();
     }
     if (!res.ok || !Array.isArray(faces)) {
-      facesGrid.replaceChildren();
+      facesEmpty.hidden = false;
       facesEmpty.textContent = data.error || "Could not load snapshots";
       updateFacesPager();
       return;
     }
     if (facesTotal === 0) {
       facesGrid.replaceChildren();
+      facesEmpty.hidden = false;
       facesEmpty.textContent = "No snapshots yet";
+      updateFacesPager();
+      return;
+    }
+    if (!faces.length) {
+      facesEmpty.hidden = false;
+      facesEmpty.textContent = "Could not load this page";
       updateFacesPager();
       return;
     }
     facesEmpty.hidden = true;
     renderFaceCards(faces);
     updateFacesPager();
+    prefetchFacePage(facesPage + 1);
+    prefetchFacePage(facesPage - 1);
     if (syncFacesPageSize() !== limit) return loadFaces();
   } catch (err) {
     if (facesFetchId && err) {
-      facesGrid.replaceChildren();
+      facesEmpty.hidden = false;
       facesEmpty.textContent = String(err.message || err);
+      if (!facesGrid.childElementCount) facesGrid.replaceChildren();
     }
   } finally {
     if (!facesGallery.hidden) startFacesPoll();
@@ -1359,7 +1389,7 @@ async function loadFaces() {
 
 async function refreshFaces() {
   if (facesPage !== 0) return;
-  const { reqId, res, faces, total } = await fetchFacesPage({ names: false });
+  const { reqId, res, faces, total } = await fetchFacesPage({ names: false, track: false, fresh: true });
   if (reqId !== facesFetchId) return;
   if (!res.ok || !Array.isArray(faces)) return;
   facesTotal = total;
