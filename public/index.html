@@ -50,7 +50,26 @@
         <button type="button" id="btn-save">Save clip</button>
       </form>
 
-      <section id="live-dash" hidden></section>
+      <section id="live-page" hidden>
+        <div class="live-toolbar">
+          <button type="button" id="btn-add-camera">Add camera</button>
+        </div>
+        <div id="live-dash"></div>
+      </section>
+
+      <dialog id="camera-modal" class="camera-modal">
+        <form id="camera-form">
+          <h3>Add camera</h3>
+          <label>Name <input id="cam-name" type="text" required autocomplete="off" /></label>
+          <label>IP address <input id="cam-host" type="text" required autocomplete="off" placeholder="192.168.1.2" /></label>
+          <label>Username <input id="cam-user" type="text" required autocomplete="off" /></label>
+          <label>Password <input id="cam-pass" type="password" autocomplete="off" /></label>
+          <div class="camera-modal-actions">
+            <button type="button" id="btn-camera-cancel">Cancel</button>
+            <button type="submit" id="btn-camera-save">Add</button>
+          </div>
+        </form>
+      </dialog>
 
       <section class="player" id="player">
         <div class="stage">
@@ -80,6 +99,10 @@
             <h2>Snapshots</h2>
           </div>
           <div class="faces-head-tools">
+            <label class="cam-pick">
+              Camera
+              <select id="faces-cam" aria-label="Camera"></select>
+            </label>
             <p id="faces-empty">Loading snapshots…</p>
             <div class="face-pager">
               <button type="button" id="btn-faces-prev" class="icon-btn" aria-label="Previous">‹</button>
@@ -166,6 +189,10 @@
     <dialog id="snaps-modal" class="snaps-modal">
       <div class="group-modal-head">
         <h3>Captured snapshots</h3>
+        <label class="cam-pick">
+          Camera
+          <select id="snaps-cam" aria-label="Camera"></select>
+        </label>
         <button type="button" id="btn-close-snaps" class="icon-btn" aria-label="Close">×</button>
       </div>
       <div class="snaps-modal-body">

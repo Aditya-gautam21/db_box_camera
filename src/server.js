@@ -1,9 +1,10 @@
 import express from "express";
-import { stream, audioStream, sampleRateFromQuery } from "../utils/livestream.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { stream, audioStream, sampleRateFromQuery } from "../utils/livestream.js";
 import { clipStream, clipAudio, saveClip } from "../utils/clips.js";
 import { listSnappedFaces, getSnapJpeg } from "../utils/fetch_faces.js";
+import { loadCameras, addCamera, getCamera, getRtspUrl, publicCameras } from "../utils/cameras.js";
 import {
   listGroups,
   addGroup,
@@ -23,31 +24,6 @@ const publicDir = path.join(__dirname, "..", "public");
 const dataDir = path.join(__dirname, "..", "data");
 const clipsDir = path.join(dataDir, "clips");
 
-const CAMERAS = [
-  {
-    id: "eng",
-    label: "Engineering room",
-    aliases: ["eng"],
-    rtsp: process.env.ENG_CAMERA_RTSP_URL || process.env.CAMERA_RTSP_URL,
-  },
-  {
-    id: "cast",
-    label: "Casting",
-    aliases: ["cast", "casting"],
-    rtsp: process.env.CAST_CAMERA_RTSP_URL,
-  },
-].filter((cam) => cam.rtsp);
-
-function getCamera(id) {
-  const key = String(id || "").toLowerCase();
-  return CAMERAS.find((cam) => cam.id === key || cam.aliases.includes(key));
-}
-
-if (!CAMERAS.length) {
-  console.error("Missing ENG_CAMERA_RTSP_URL or CAST_CAMERA_RTSP_URL");
-  process.exit(1);
-}
-
 const app = express();
 app.use(express.json({ limit: "12mb" }));
 
@@ -59,45 +35,59 @@ function asyncRoute(fn) {
 
 app.get("/api/health", (_req, res) => res.json({ message: "Node is up" }));
 
-app.get("/api/cameras", (_req, res) => {
-  res.json(CAMERAS.map(({ id, label }) => ({ id, label })));
-});
+app.get("/api/cameras", asyncRoute(async (_req, res) => {
+  res.json(publicCameras(await loadCameras()));
+}));
 
-app.get("/stream/:cam", (req, res) => {
-  const cam = getCamera(req.params.cam);
+app.post("/api/cameras", asyncRoute(async (req, res) => {
+  const name = String(req.body?.name || "").trim();
+  const host = String(req.body?.host || "").trim();
+  const username = String(req.body?.username || "").trim();
+  const password = String(req.body?.password ?? "");
+  if (!name || !host || !username) {
+    res.status(400).json({ error: "name, host, and username required" });
+    return;
+  }
+  const camera = await addCamera(name, host, username, password);
+  res.json({ id: camera.id, name: camera.name });
+}));
+
+app.get("/stream/:cam", asyncRoute(async (req, res) => {
+  const cam = await getCamera(req.params.cam);
   if (!cam) {
     res.status(404).send("unknown camera");
     return;
   }
-  stream(req, res, cam.rtsp);
-});
+  stream(req, res, getRtspUrl(cam));
+}));
 
-app.get("/stream-audio/:cam", (req, res) => {
-  const cam = getCamera(req.params.cam);
+app.get("/stream-audio/:cam", asyncRoute(async (req, res) => {
+  const cam = await getCamera(req.params.cam);
   if (!cam) {
     res.status(404).send("unknown camera");
     return;
   }
-  audioStream(req, res, cam.rtsp, { sampleRate: sampleRateFromQuery(req) });
-});
+  audioStream(req, res, getRtspUrl(cam), { sampleRate: sampleRateFromQuery(req) });
+}));
 
 app.get("/api/faces", asyncRoute(async (req, res) => {
+  const start = req.query.start != null ? Number(req.query.start) : undefined;
+  const end = req.query.end != null ? Number(req.query.end) : undefined;
   const limit = req.query.limit != null ? Number(req.query.limit) : undefined;
   const offset = req.query.offset != null ? Number(req.query.offset) : 0;
-  const result = await listSnappedFaces(
-    Number.isFinite(limit) && limit > 0
-      ? { offset, limit, names: req.query.names }
-      : { names: req.query.names },
-  );
-  if (Number.isFinite(limit) && limit > 0) {
-    res.json(result);
-    return;
-  }
-  res.json(result.faces);
+  const result = await listSnappedFaces({
+    cam: req.query.cam,
+    offset,
+    limit,
+    start,
+    end,
+    names: req.query.names,
+  });
+  res.json(result);
 }));
 
 app.get("/api/snaps/:uuid", asyncRoute(async (req, res) => {
-  const jpeg = await getSnapJpeg(req.params.uuid);
+  const jpeg = await getSnapJpeg(req.params.uuid, req.query.cam);
   res.type("jpeg").send(jpeg);
 }));
 

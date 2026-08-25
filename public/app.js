@@ -6,11 +6,16 @@ const facesBtn = document.getElementById("btn-faces");
 const groupsBtn = document.getElementById("btn-groups");
 const clipForm = document.getElementById("clip-form");
 const player = document.getElementById("player");
+const livePage = document.getElementById("live-page");
 const liveDash = document.getElementById("live-dash");
+const cameraModal = document.getElementById("camera-modal");
+const cameraForm = document.getElementById("camera-form");
 const facesGallery = document.getElementById("faces-gallery");
 const groupsPage = document.getElementById("groups-page");
 const facesGrid = document.getElementById("faces-grid");
 const facesEmpty = document.getElementById("faces-empty");
+const facesCam = document.getElementById("faces-cam");
+const snapsCam = document.getElementById("snaps-cam");
 const facesPageEl = document.getElementById("faces-page");
 const btnFacesPrev = document.getElementById("btn-faces-prev");
 const btnFacesNext = document.getElementById("btn-faces-next");
@@ -80,6 +85,7 @@ let facesPageSize = 10;
 let facesPage = 0;
 let facesTotal = 0;
 let facesResizeTimer;
+let lastCamId = "";
 const snapSelected = new Set();
 
 function localInputValue(date) {
@@ -254,21 +260,57 @@ function onLiveTileFullscreen() {
   startPcmAudio(`/stream-audio/${cam}`);
 }
 
+function cameraName(cam) {
+  return cam.name || cam.label || cam.id;
+}
+
+function camQuery(select) {
+  const id = select?.value;
+  return id ? `&cam=${encodeURIComponent(id)}` : "";
+}
+
+async function fillCamSelect(select, selectedId) {
+  const prev = selectedId || select.value || lastCamId;
+  const res = await fetch("/api/cameras");
+  const cams = await res.json();
+  if (!res.ok || !Array.isArray(cams)) {
+    throw new Error(cams.error || "Could not load cameras");
+  }
+  select.replaceChildren();
+  if (!cams.length) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No cameras";
+    select.append(opt);
+    return cams;
+  }
+  for (const cam of cams) {
+    const opt = document.createElement("option");
+    opt.value = cam.id;
+    opt.textContent = cameraName(cam);
+    select.append(opt);
+  }
+  if (prev && [...select.options].some((o) => o.value === prev)) select.value = prev;
+  if (select.value) lastCamId = select.value;
+  return cams;
+}
+
 function makeLiveTile(cam) {
+  const label = cameraName(cam);
   const tile = document.createElement("article");
   tile.className = "live-tile";
   tile.dataset.cam = cam.id;
-  tile.dataset.label = cam.label;
+  tile.dataset.label = label;
   tile.tabIndex = 0;
   tile.setAttribute("role", "button");
-  tile.setAttribute("aria-label", `${cam.label} live view`);
+  tile.setAttribute("aria-label", `${label} live view`);
   const img = document.createElement("img");
-  img.alt = cam.label;
+  img.alt = label;
   img.src = `/stream/${encodeURIComponent(cam.id)}`;
   const bar = document.createElement("div");
   bar.className = "live-tile-bar";
   const name = document.createElement("span");
-  name.textContent = cam.label;
+  name.textContent = label;
   const muteBtn = document.createElement("button");
   muteBtn.type = "button";
   muteBtn.className = "live-tile-mute";
@@ -289,22 +331,37 @@ function makeLiveTile(cam) {
   return tile;
 }
 
+function drawLiveWindows(cams) {
+  const numWindows = cams.length;
+  liveDash.dataset.count = String(numWindows);
+  const cols = Math.min(2, Math.max(1, numWindows));
+  liveDash.style.setProperty("--live-count", String(cols));
+  if (numWindows === 0) {
+    liveDash.replaceChildren();
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  for (const cam of cams) frag.append(makeLiveTile(cam));
+  liveDash.replaceChildren(frag);
+}
+
 async function loadLiveDash() {
   stopView();
   stopLiveDash();
-  liveDash.hidden = false;
+  livePage.hidden = false;
   try {
     const res = await fetch("/api/cameras");
     const cams = await res.json();
-    if (!res.ok || !Array.isArray(cams) || cams.length === 0) {
-      statusEl.textContent = "No live cameras configured";
+    if (!res.ok || !Array.isArray(cams)) {
+      statusEl.textContent = cams.error || "Could not load cameras";
       return;
     }
-    liveDash.classList.toggle("one", cams.length === 1);
-    const frag = document.createDocumentFragment();
-    for (const cam of cams) frag.append(makeLiveTile(cam));
-    liveDash.replaceChildren(frag);
-    statusEl.textContent = cams.length === 1 ? `Live · ${cams[0].label}` : "Live dashboard";
+    drawLiveWindows(cams);
+    if (cams.length === 0) {
+      statusEl.textContent = "No cameras yet — add one to start";
+      return;
+    }
+    statusEl.textContent = cams.length === 1 ? `Live · ${cameraName(cams[0])}` : `Live dashboard · ${cams.length} cameras`;
   } catch (err) {
     statusEl.textContent = String(err.message || err);
   }
@@ -488,9 +545,12 @@ function setChrome({ page, status, mode, rawHref, rawText, showPlayer = true }) 
   clipForm.hidden = page !== "clip";
   facesGallery.hidden = page !== "faces";
   groupsPage.hidden = page !== "groups";
-  liveDash.hidden = page !== "live";
+  livePage.hidden = page !== "live";
   player.hidden = page === "live" || !showPlayer;
-  if (page !== "live") stopLiveDash();
+  if (page !== "live") {
+    stopLiveDash();
+    cameraModal.close();
+  }
   if (!showPlayer && isPlayerFullscreen()) {
     const exit = document.exitFullscreen || document.webkitExitFullscreen;
     exit?.call(document);
@@ -1022,7 +1082,9 @@ async function loadCapturedSnaps() {
   modalSnapsGrid.replaceChildren();
   updateSnapPager();
   try {
-    const res = await fetch(`/api/faces?offset=${snapPage * SNAP_PAGE_SIZE}&limit=${SNAP_PAGE_SIZE}`);
+    const res = await fetch(
+      `/api/faces?start=${snapPage * SNAP_PAGE_SIZE}&end=${(snapPage + 1) * SNAP_PAGE_SIZE}&offset=${snapPage * SNAP_PAGE_SIZE}&limit=${SNAP_PAGE_SIZE}${camQuery(snapsCam)}`,
+    );
     const data = await res.json();
     const faces = Array.isArray(data) ? data : data.faces;
     snapTotal = Array.isArray(data) ? data.length : Number(data.total) || 0;
@@ -1158,7 +1220,7 @@ function applyFaceNames(faces) {
   }
 }
 
-function showFaces({ push = true } = {}) {
+async function showFaces({ push = true } = {}) {
   if (push) history.pushState({}, "", "/faces");
   setChrome({
     page: "faces",
@@ -1169,13 +1231,23 @@ function showFaces({ push = true } = {}) {
     showPlayer: false,
   });
   stopView();
+  try {
+    await fillCamSelect(facesCam);
+  } catch (err) {
+    facesEmpty.hidden = false;
+    facesEmpty.textContent = String(err.message || err);
+    facesGrid.replaceChildren();
+    return;
+  }
   return loadFaces();
 }
 
 async function fetchFacesPage() {
   syncFacesPageSize();
+  const start = facesPage * facesPageSize;
+  const end = start + facesPageSize;
   const res = await fetch(
-    `/api/faces?offset=${facesPage * facesPageSize}&limit=${facesPageSize}&names=1`,
+    `/api/faces?start=${start}&end=${end}&offset=${start}&limit=${facesPageSize}&names=1${camQuery(facesCam)}`,
   );
   const data = await res.json();
   const faces = Array.isArray(data) ? data : data.faces;
@@ -1375,7 +1447,12 @@ document.getElementById("btn-import-capture").addEventListener("click", () => {
   snapPage = 0;
   snapSelected.clear();
   if (!snapsModal.open) snapsModal.showModal();
-  loadCapturedSnaps();
+  fillCamSelect(snapsCam, facesCam.value || lastCamId)
+    .then(() => loadCapturedSnaps())
+    .catch((err) => {
+      modalSnapsEmpty.hidden = false;
+      modalSnapsEmpty.textContent = String(err.message || err);
+    });
 });
 document.getElementById("btn-close-snaps").addEventListener("click", () => snapsModal.close());
 btnFacesPrev.addEventListener("click", () => {
@@ -1387,6 +1464,18 @@ btnFacesNext.addEventListener("click", () => {
   if (facesPage >= facesPageCount() - 1) return;
   facesPage += 1;
   loadFaces();
+});
+
+facesCam.addEventListener("change", () => {
+  lastCamId = facesCam.value;
+  facesPage = 0;
+  loadFaces();
+});
+snapsCam.addEventListener("change", () => {
+  lastCamId = snapsCam.value;
+  snapPage = 0;
+  snapSelected.clear();
+  loadCapturedSnaps();
 });
 
 document.getElementById("btn-snaps-prev").addEventListener("click", () => {
@@ -1405,7 +1494,7 @@ document.getElementById("btn-add-snaps").addEventListener("click", async () => {
   await addFacesToGroup(
     uuids.map((uuid) => ({
       label: uuid,
-      body: async () => ({ uuid }),
+      body: async () => ({ uuid, cam: snapsCam.value }),
     })),
   );
   snapSelected.clear();
@@ -1450,6 +1539,39 @@ document.getElementById("btn-delete-face").addEventListener("click", async () =>
 liveBtn.addEventListener("click", (event) => {
   event.preventDefault();
   showLive();
+});
+
+document.getElementById("btn-add-camera").addEventListener("click", () => {
+  cameraForm.reset();
+  if (!cameraModal.open) cameraModal.showModal();
+});
+
+document.getElementById("btn-camera-cancel").addEventListener("click", () => {
+  cameraModal.close();
+});
+
+cameraForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const body = {
+    name: document.getElementById("cam-name").value.trim(),
+    host: document.getElementById("cam-host").value.trim(),
+    username: document.getElementById("cam-user").value.trim(),
+    password: document.getElementById("cam-pass").value,
+  };
+  try {
+    const res = await fetch("/api/cameras", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Could not add camera");
+    cameraModal.close();
+    statusEl.textContent = `Added ${data.name}`;
+    await loadLiveDash();
+  } catch (err) {
+    statusEl.textContent = String(err.message || err);
+  }
 });
 
 clipBtn.addEventListener("click", (event) => {

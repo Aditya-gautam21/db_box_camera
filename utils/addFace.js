@@ -16,7 +16,7 @@ function stripDataUrl(value) {
 }
 
 export async function getGrpId(list) {
-  const names = await groupMap(getSession());
+  const names = await groupMap(await getSession());
   const want = String(list).toLowerCase();
   for (const [id, name] of names) {
     if (String(name).toLowerCase() === want) return id;
@@ -25,7 +25,7 @@ export async function getGrpId(list) {
 }
 
 export async function listGroups() {
-  const res = await getSession().post("/API/AI/FDGroup/Get", {
+  const res = await (await getSession()).post("/API/AI/FDGroup/Get", {
     MsgId: null,
     TypeFlags: 1,
     DefaultVal: 0,
@@ -49,7 +49,7 @@ export async function listGroups() {
 export async function modifyGroup(id, fields = {}) {
   const gid = Number(id);
   if (!Number.isFinite(gid)) throw new Error("group id required");
-  const res = await getSession().post("/API/AI/FDGroup/Get", {
+  const res = await (await getSession()).post("/API/AI/FDGroup/Get", {
     MsgId: null,
     TypeFlags: 1,
     DefaultVal: 0,
@@ -80,7 +80,7 @@ export async function modifyGroup(id, fields = {}) {
   if (fields.detectType != null && fields.detectType !== "") {
     group.DetectType = Number(fields.detectType);
   }
-  const mod = await getSession().post("/API/AI/FDGroup/Modify", {
+  const mod = await (await getSession()).post("/API/AI/FDGroup/Modify", {
     Group: [group],
   });
   const result = mod.data?.Result;
@@ -101,7 +101,7 @@ export async function modifyGroup(id, fields = {}) {
 export async function addGroup(name) {
   const trimmed = String(name || "").trim();
   if (!trimmed) throw new Error("group name required");
-  const res = await getSession().post("/API/AI/FDGroup/Add", {
+  const res = await (await getSession()).post("/API/AI/FDGroup/Add", {
     MsgId: null,
     Group: [
       {
@@ -123,7 +123,7 @@ export async function addGroup(name) {
 }
 
 export async function removeGroup(id) {
-  const res = await getSession().post("/API/AI/FDGroup/Remove", {
+  const res = await (await getSession()).post("/API/AI/FDGroup/Remove", {
     MsgId: null,
     Group: [{ Id: Number(id) }],
   });
@@ -159,7 +159,7 @@ function cacheFaceJpeg(id, b64) {
 }
 
 export async function listGroupFaces(grpId) {
-  const session = getSession();
+  const session = await getSession();
   const search = await session.post("/API/AI/AddedFaces/Search", {
     MsgId: null,
     FaceInfo: [{ GrpId: Number(grpId) }],
@@ -178,7 +178,7 @@ export async function listGroupFaces(grpId) {
 }
 
 export async function getFace(id) {
-  const res = await getSession().post("/API/AI/AddedFaces/GetById", {
+  const res = await (await getSession()).post("/API/AI/AddedFaces/GetById", {
     MsgId: null,
     FacesId: [Number(id)],
     SimpleInfo: 0,
@@ -195,7 +195,7 @@ export async function getFaceJpeg(id) {
   const faceId = Number(id);
   const hit = faceJpegCache.get(faceId);
   if (hit) return hit;
-  const res = await getSession().post("/API/AI/AddedFaces/GetById", {
+  const res = await (await getSession()).post("/API/AI/AddedFaces/GetById", {
     MsgId: null,
     FacesId: [faceId],
     SimpleInfo: 0,
@@ -214,7 +214,7 @@ export async function removeFace({ id, grpId }) {
   if (!Number.isFinite(faceId) || !Number.isFinite(gid)) {
     throw new Error("face id and group id required");
   }
-  const res = await getSession().post("/API/AI/Faces/Remove", {
+  const res = await (await getSession()).post("/API/AI/Faces/Remove", {
     MsgId: null,
     Count: 1,
     FaceInfo: [{ Id: faceId, GrpId: gid }],
@@ -230,7 +230,7 @@ export async function modifyFace(fields) {
   if (!Number.isFinite(faceId) || !Number.isFinite(gid)) {
     throw new Error("face id and group id required");
   }
-  const currentRes = await getSession().post("/API/AI/AddedFaces/GetById", {
+  const currentRes = await (await getSession()).post("/API/AI/AddedFaces/GetById", {
     MsgId: null,
     FacesId: [faceId],
     SimpleInfo: 0,
@@ -259,7 +259,7 @@ export async function modifyFace(fields) {
   delete face.Image1;
   delete face.Feature;
   delete face.FtVersion;
-  const res = await getSession().post("/API/AI/Faces/Modify", {
+  const res = await (await getSession()).post("/API/AI/Faces/Modify", {
     MsgId: null,
     Count: 1,
     FaceInfo: [face],
@@ -272,8 +272,8 @@ export async function modifyFace(fields) {
   return mapFace(face);
 }
 
-async function snapBlobs(uuid) {
-  const res = await getSession().post("/API/AI/SnapedFaces/GetById", {
+async function snapBlobs(uuid, cam) {
+  const res = await (await getSession(cam)).post("/API/AI/SnapedFaces/GetById", {
     MsgId: "",
     Engine: 1,
     UUIds: [uuid],
@@ -309,7 +309,7 @@ async function enroll({
   if (!Number.isFinite(gid)) throw new Error("group id required");
   const image1 = stripDataUrl(image);
   if (!image1) throw new Error("image required");
-  const res = await getSession().post("/API/AI/Faces/Add", {
+  const res = await (await getSession()).post("/API/AI/Faces/Add", {
     FaceInfo: [
       {
         Id: -1,
@@ -345,7 +345,7 @@ export async function addImportedFaces(fields) {
 
 export async function addCapturedFaces(fields) {
   if (fields.uuid && !fields.image) {
-    const snap = await snapBlobs(fields.uuid);
+    const snap = await snapBlobs(fields.uuid, fields.cam);
     return enroll({
       ...fields,
       image: snap.FaceImage,

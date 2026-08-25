@@ -1,7 +1,8 @@
 import { getSession } from "./camera_session.js";
-import { assignGroupsToFaces, groupIdsForUuids, groupMap, recentGroupStats } from "./group_data.js";
+import { assignGroupsToFaces, groupMap, recentGroupStats } from "./group_data.js";
 
 const nameCache = new Map();
+const MAX_PAGE = 40;
 
 function today() {
   const d = new Date();
@@ -25,8 +26,31 @@ function cacheJpeg(uuid, buf) {
   jpegCache.delete(first);
 }
 
-export async function listSnappedFaces({ offset = 0, limit, names } = {}) {
-  const session = getSession();
+function groupIdFromRow(row) {
+  if (Number.isFinite(row?.Group) && row.Group > 0) return row.Group;
+  if (Number.isFinite(row?.GrpId) && row.GrpId > 0) return row.GrpId;
+  if (Number.isFinite(row?.GroupId) && row.GroupId > 0) return row.GroupId;
+  if (Array.isArray(row?.AlarmGroup) && Number.isFinite(row.AlarmGroup[0])) return row.AlarmGroup[0];
+  return null;
+}
+
+function pageRange({ offset = 0, limit, start, end }, total) {
+  let fromNewest = Math.max(0, Number(offset) || 0);
+  let pageSize = Number(limit);
+  if (start != null && end != null) {
+    fromNewest = Math.max(0, Number(start) || 0);
+    pageSize = Math.max(0, Number(end) - fromNewest);
+  }
+  if (!Number.isFinite(pageSize) || pageSize <= 0) pageSize = 12;
+  pageSize = Math.min(MAX_PAGE, pageSize);
+  const endIndex = Math.max(0, total - fromNewest);
+  const startIndex = Math.max(0, endIndex - pageSize);
+  return { startIndex, endIndex, count: endIndex - startIndex };
+}
+
+export async function listSnappedFaces({ cam, offset = 0, limit, start, end, names } = {}) {
+  const session = await getSession(cam);
+  const camId = session.id;
   const date = today();
   const search = await session.post("/API/AI/SnapedFaces/Search", {
     MsgId: "",
@@ -42,16 +66,8 @@ export async function listSnappedFaces({ offset = 0, limit, names } = {}) {
   const total = search.data?.Count ?? 0;
   if (!total) return { faces: [], total: 0 };
 
-  const paginate = Number.isFinite(Number(limit)) && Number(limit) > 0;
-  const off = Math.max(0, Number(offset) || 0);
-  let startIndex = 0;
-  let count = total;
-  if (paginate) {
-    const take = Math.min(Number(limit), Math.max(0, total - off));
-    if (!take) return { faces: [], total };
-    startIndex = Math.max(0, total - off - take);
-    count = take;
-  }
+  const { startIndex, count } = pageRange({ offset, limit, start, end }, total);
+  if (!count) return { faces: [], total };
 
   const page = await session.post("/API/AI/SnapedFaces/GetByIndex", {
     MsgId: "",
@@ -67,64 +83,66 @@ export async function listSnappedFaces({ offset = 0, limit, names } = {}) {
     NeedTime: 1,
   });
   const faces = [...(page.data?.SnapedFaceInfo ?? [])].reverse();
-  const wantNames = names === true || names === "1" || !paginate;
+  const wantNames = names === true || names === "1";
   if (wantNames) {
     try {
-      await resolveNames(session, faces);
+      await resolveNames(session, faces, camId);
     } catch (err) {
       console.error("face names", err);
     }
   }
   return {
     total,
+    startIndex,
+    count,
     faces: faces.map((row) => {
       const uuid = row.UUId;
-      const start = row.StartTime ? cameraStamp(row.StartTime) : null;
-      const end = row.StartTime ? cameraStamp(row.StartTime + 5 * 60) : null;
+      const startTime = row.StartTime ? cameraStamp(row.StartTime) : null;
       return {
         uuid,
         filename: uuid,
-        url: `/api/snaps/${encodeURIComponent(uuid)}`,
-        name: nameCache.get(uuid) || "unknown",
-        start,
-        end,
+        url: `/api/snaps/${encodeURIComponent(uuid)}?cam=${encodeURIComponent(camId)}`,
+        name: nameCache.get(`${camId}:${uuid}`) || "unknown",
+        start: startTime,
+        end: row.StartTime ? cameraStamp(row.StartTime + 5 * 60) : null,
       };
     }),
   };
 }
 
-async function resolveNames(session, rows) {
-  const unnamed = rows.filter((row) => row.UUId && !nameCache.has(row.UUId));
+async function resolveNames(session, rows, camId) {
+  const keyOf = (uuid) => `${camId}:${uuid}`;
+  const unnamed = rows.filter((row) => row.UUId && !nameCache.has(keyOf(row.UUId)));
   if (!unnamed.length) return;
   const names = await groupMap(session);
-  const byUuid = new Map();
-  const unix = unnamed[0].StartTime;
-  if (unix) {
-    const ids = unnamed.map((row) => row.UUId);
-    for (const [uuid, gid] of await groupIdsForUuids(session, unix, ids, [...names.keys()])) {
-      byUuid.set(uuid, gid);
-    }
-    const leftover = unnamed.filter((row) => row.StartTime && !byUuid.has(row.UUId)).slice(0, 20);
-    if (leftover.length) {
-      const stats = await recentGroupStats(session, unix);
-      const timed = leftover.map((row) => ({
-        UUId: row.UUId,
-        StartTime: row.StartTime,
-        EndTime: row.EndTime || row.StartTime + 5,
-      }));
-      for (const [uuid, gid] of assignGroupsToFaces(timed, stats)) byUuid.set(uuid, gid);
+  for (const row of unnamed) {
+    const gid = groupIdFromRow(row);
+    if (gid != null && names.has(gid)) nameCache.set(keyOf(row.UUId), names.get(gid));
+  }
+  const leftover = unnamed.filter((row) => !nameCache.has(keyOf(row.UUId)) && row.StartTime);
+  if (leftover.length) {
+    const stats = await recentGroupStats(session, leftover[0].StartTime, leftover.length + 8);
+    const timed = leftover.map((row) => ({
+      UUId: row.UUId,
+      StartTime: row.StartTime,
+      EndTime: row.EndTime || row.StartTime + 5,
+    }));
+    for (const [uuid, gid] of assignGroupsToFaces(timed, stats)) {
+      nameCache.set(keyOf(uuid), names.get(gid) ?? "unknown");
     }
   }
   for (const row of unnamed) {
-    nameCache.set(row.UUId, names.get(byUuid.get(row.UUId)) ?? "unknown");
+    if (!nameCache.has(keyOf(row.UUId))) nameCache.set(keyOf(row.UUId), "unknown");
   }
 }
 
-export async function getSnapJpeg(uuid) {
+export async function getSnapJpeg(uuid, cam) {
   if (!uuid) throw new Error("uuid required");
-  const hit = jpegCache.get(uuid);
+  const session = await getSession(cam);
+  const cacheKey = `${session.id}:${uuid}`;
+  const hit = jpegCache.get(cacheKey);
   if (hit) return hit;
-  const res = await getSession().post("/API/AI/SnapedFaces/GetById", {
+  const res = await session.post("/API/AI/SnapedFaces/GetById", {
     MsgId: "",
     Engine: 1,
     UUIds: [uuid],
@@ -136,6 +154,6 @@ export async function getSnapJpeg(uuid) {
   const face = res.data?.SnapedFaceInfo?.[0];
   if (!face?.FaceImage) throw new Error("no FaceImage");
   const buf = Buffer.from(face.FaceImage, "base64");
-  cacheJpeg(uuid, buf);
+  cacheJpeg(cacheKey, buf);
   return buf;
 }
