@@ -14,13 +14,39 @@ const PCM_HEADERS = {
   Connection: "close",
 };
 
-function pipeFfmpeg(req, res, headers, args) {
+function pipeFfmpeg(req, res, headers, args, { retries = 0, gapMs = 500 } = {}) {
   res.set(headers);
-  const ff = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "inherit"] });
-  ff.stdout.pipe(res);
-  const stop = () => ff.kill("SIGKILL");
+  let ff;
+  let stopped = false;
+  const stop = () => {
+    stopped = true;
+    ff?.kill("SIGKILL");
+  };
   req.on("close", stop);
-  ff.on("exit", () => res.end());
+  res.on("close", stop);
+
+  const start = (attempt) => {
+    if (stopped || res.writableEnded) return;
+    ff = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "inherit"] });
+    ff.stdout.pipe(res, { end: false });
+    ff.on("exit", (code) => {
+      try {
+        ff.stdout.unpipe(res);
+      } catch {
+        /* already unpiped */
+      }
+      if (stopped || res.writableEnded) {
+        if (!res.writableEnded) res.end();
+        return;
+      }
+      if (attempt < retries && code) {
+        setTimeout(() => start(attempt + 1), gapMs);
+        return;
+      }
+      if (!res.writableEnded) res.end();
+    });
+  };
+  start(0);
 }
 
 function liveVideoArgs(rtspUrl) {
@@ -42,7 +68,21 @@ function liveVideoArgs(rtspUrl) {
 }
 
 function clipVideoArgs(rtspUrl, duration) {
-  const args = ["-rtsp_transport", "tcp", "-timeout", "3000000", "-i", rtspUrl, "-an", "-f", "mpjpeg", "-q:v", "5"];
+  const args = [
+    "-hide_banner",
+    "-loglevel", "warning",
+    "-rtsp_transport", "tcp",
+    "-timeout", "10000000",
+    "-probesize", "5000000",
+    "-analyzeduration", "5000000",
+    "-fflags", "+genpts",
+    "-i", rtspUrl,
+    "-map", "0:v:0?",
+    "-an",
+    "-vf", "fps=12,scale=960:-2",
+    "-f", "mpjpeg",
+    "-q:v", "5",
+  ];
   if (duration) args.push("-t", String(duration));
   args.push("pipe:1");
   return args;
@@ -53,8 +93,9 @@ function audioArgs(rtspUrl, { duration, sampleRate = 48000 } = {}) {
     "-hide_banner",
     "-loglevel", "fatal",
     "-rtsp_transport", "tcp",
-    "-fflags", "nobuffer",
-    "-flags", "low_delay",
+    "-timeout", "10000000",
+    "-probesize", "2000000",
+    "-analyzeduration", "2000000",
     "-i", rtspUrl,
     "-vn",
     "-ac", "1",
@@ -115,7 +156,10 @@ export function sampleRateFromQuery(req) {
 
 export function stream(req, res, rtspUrl, { duration } = {}) {
   if (duration) {
-    pipeFfmpeg(req, res, MJPEG_HEADERS, clipVideoArgs(rtspUrl, duration));
+    enqueueClip(() => {
+      if (req.destroyed || res.writableEnded) return;
+      pipeFfmpeg(req, res, MJPEG_HEADERS, clipVideoArgs(rtspUrl, duration), { retries: 2, gapMs: 600 });
+    });
     return;
   }
   joinHub(`v:${rtspUrl}`, req, res, MJPEG_HEADERS, liveVideoArgs(rtspUrl));
@@ -124,8 +168,19 @@ export function stream(req, res, rtspUrl, { duration } = {}) {
 export function audioStream(req, res, rtspUrl, { duration, sampleRate = 48000 } = {}) {
   const args = audioArgs(rtspUrl, { duration, sampleRate });
   if (duration) {
-    pipeFfmpeg(req, res, PCM_HEADERS, args);
+    enqueueClip(() => {
+      if (req.destroyed || res.writableEnded) return;
+      pipeFfmpeg(req, res, PCM_HEADERS, args, { retries: 1, gapMs: 600 });
+    });
     return;
   }
   joinHub(`a:${rtspUrl}:${sampleRate}`, req, res, PCM_HEADERS, args);
+}
+
+let clipGate = Promise.resolve();
+function enqueueClip(start) {
+  clipGate = clipGate
+    .then(() => new Promise((resolve) => setTimeout(resolve, 400)))
+    .then(start, start)
+    .catch(() => {});
 }

@@ -1,7 +1,8 @@
 import { getSession } from "./cameraSession.js";
-import { groupMap } from "./groupData.js";
+import { assignGroupsToFaces, groupIdsForUuids, groupMap, recentGroupStats } from "./groupData.js";
 
 const nameCache = new Map();
+let nameCacheStranger = "Stranger";
 const MAX_PAGE = 40;
 
 const GENDER = { male: 0, female: 1 };
@@ -118,10 +119,18 @@ async function fillMissingJpegs(session, rows) {
     });
     const byId = new Map();
     for (const row of res.data?.SnapedFaceInfo ?? []) {
-      if (row.UUId && row.FaceImage) byId.set(row.UUId, row.FaceImage);
+      if (row.UUId) byId.set(row.UUId, row);
     }
     for (const row of rows) {
-      if (!row.FaceImage) row.FaceImage = byId.get(row.UUId);
+      const extra = byId.get(row.UUId);
+      if (!extra) continue;
+      if (!row.FaceImage && extra.FaceImage) row.FaceImage = extra.FaceImage;
+      if (usefulGroupId(row) == null && usefulGroupId(extra) != null) {
+        row.Group = extra.Group;
+        row.GrpId = extra.GrpId;
+        row.GroupId = extra.GroupId;
+        row.AlarmGroup = extra.AlarmGroup;
+      }
     }
   }
 }
@@ -132,6 +141,12 @@ function groupIdFromRow(row) {
   if (Number.isFinite(row?.GroupId) && row.GroupId > 0) return row.GroupId;
   if (Array.isArray(row?.AlarmGroup) && Number.isFinite(row.AlarmGroup[0])) return row.AlarmGroup[0];
   return null;
+}
+
+function usefulGroupId(row) {
+  const gid = groupIdFromRow(row);
+  if (gid == null || gid === 4) return null;
+  return gid;
 }
 
 function pageRange({ offset = 0, limit, start, end }, total) {
@@ -146,6 +161,27 @@ function pageRange({ offset = 0, limit, start, end }, total) {
   const endIndex = Math.max(0, total - fromNewest);
   const startIndex = Math.max(0, endIndex - pageSize);
   return { startIndex, endIndex, count: endIndex - startIndex };
+}
+
+async function getSnapRows(session, startIndex, count) {
+  const body = {
+    MsgId: "",
+    Engine: 1,
+    MatchedFaces: 0,
+    StartIndex: startIndex,
+    Count: count,
+    WithFaceImage: 0,
+    WithBodyImage: 0,
+    WithBackgroud: 0,
+    WithFeature: 0,
+    NeedTime: 1,
+  };
+  for (const simple of [1, 0]) {
+    const page = await session.post("/API/AI/SnapedFaces/GetByIndex", { ...body, SimpleInfo: simple });
+    const rows = [...(page.data?.SnapedFaceInfo ?? [])].reverse();
+    if (rows.length) return rows;
+  }
+  return [];
 }
 
 export async function listSnappedFaces({
@@ -198,23 +234,8 @@ export async function listSnappedFaces({
   }
 
   const loading = (async () => {
-    const page = await session.post("/API/AI/SnapedFaces/GetByIndex", {
-      MsgId: "",
-      Engine: 1,
-      MatchedFaces: 0,
-      StartIndex: startIndex,
-      Count: count,
-      WithFaceImage: 0,
-      WithBodyImage: 0,
-      WithBackgroud: 0,
-      SimpleInfo: 0,
-      WithFeature: 0,
-      NeedTime: 1,
-    });
-    const faces = [...(page.data?.SnapedFaceInfo ?? [])].reverse();
-    if (!faces.length) {
-      throw new Error("camera returned no snapshots for this page");
-    }
+    const faces = await getSnapRows(session, startIndex, count);
+    if (!faces.length) return { total, startIndex, count, faces: [] };
     await fillMissingJpegs(session, faces);
     if (wantNames) {
       try {
@@ -244,7 +265,7 @@ export async function listSnappedFaces({
         };
       }),
     };
-    cachePage(pageKey, result);
+    if (result.faces.length) cachePage(pageKey, result);
     return result;
   })();
   if (!bypass) pageInflight.set(pageKey, loading);
@@ -257,17 +278,54 @@ export async function listSnappedFaces({
 
 async function resolveNames(session, rows, camId) {
   const keyOf = (uuid) => `${camId}:${uuid}`;
-  const unnamed = rows.filter((row) => row.UUId && !nameCache.has(keyOf(row.UUId)));
+  const unnamed = rows.filter((row) => {
+    const name = nameCache.get(keyOf(row.UUId));
+    return row.UUId && (!name || name === "unknown" || name === nameCacheStranger);
+  });
   if (!unnamed.length) return;
   const names = await cachedGroupMap(session);
+  nameCacheStranger = names.get(4) || "unknown";
   for (const row of unnamed) {
-    const gid = groupIdFromRow(row);
+    const gid = usefulGroupId(row);
     if (gid != null && names.has(gid)) nameCache.set(keyOf(row.UUId), names.get(gid));
   }
-  const leftover = unnamed.filter((row) => !nameCache.has(keyOf(row.UUId)));
-  const stranger = names.get(4) || "unknown";
-  for (const row of leftover) {
-    nameCache.set(keyOf(row.UUId), stranger);
+  let leftover = unnamed.filter((row) => {
+    const name = nameCache.get(keyOf(row.UUId));
+    return !name || name === "unknown" || name === nameCacheStranger;
+  });
+  const unixSec = leftover.find((row) => row.StartTime)?.StartTime;
+  if (leftover.length && unixSec) {
+    const timed = leftover
+      .filter((row) => row.StartTime)
+      .map((row) => ({
+        UUId: row.UUId,
+        StartTime: row.StartTime,
+        EndTime: row.EndTime || row.StartTime + 5,
+      }));
+    if (timed.length) {
+      const stats = await recentGroupStats(session, timed[0].StartTime, Math.max(80, timed.length + 8));
+      for (const [uuid, gid] of assignGroupsToFaces(timed, stats)) {
+        if (gid && gid !== 4 && names.has(gid)) nameCache.set(keyOf(uuid), names.get(gid));
+      }
+    }
+    leftover = leftover.filter((row) => {
+      const name = nameCache.get(keyOf(row.UUId));
+      return !name || name === "unknown" || name === nameCacheStranger;
+    });
+    if (leftover.length) {
+      const byUuid = await groupIdsForUuids(
+        session,
+        unixSec,
+        leftover.map((row) => row.UUId),
+        [...names.keys()],
+      );
+      for (const [uuid, gid] of byUuid) {
+        if (gid && gid !== 4) nameCache.set(keyOf(uuid), names.get(gid) ?? "unknown");
+      }
+    }
+  }
+  for (const row of unnamed) {
+    if (!nameCache.has(keyOf(row.UUId))) nameCache.set(keyOf(row.UUId), nameCacheStranger);
   }
 }
 

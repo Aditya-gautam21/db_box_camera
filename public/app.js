@@ -72,6 +72,9 @@ const btnFs = document.getElementById("btn-fs");
 
 let endTimer;
 let tickTimer;
+let clipGen = 0;
+let clipSeekTimer;
+let clipAudioTimer;
 let audioAbort;
 let audioCtx;
 let audioGain;
@@ -222,6 +225,9 @@ function playFeed(videoUrl, audioUrl) {
 }
 
 function stopView() {
+  clipGen += 1;
+  clearTimeout(clipSeekTimer);
+  clearTimeout(clipAudioTimer);
   clearTimeout(endTimer);
   stopTick();
   stopAudio();
@@ -435,7 +441,11 @@ function startClipFeed(rangeStart, rangeEnd, offsetMs = 0) {
   const pos = Math.min(Math.max(0, offsetMs), Math.max(0, durationMs - 500));
   const playStart = cameraStamp(Date.parse(rangeStart) + pos);
   const remaining = Date.parse(rangeEnd) - Date.parse(playStart);
-  const feedUrl = `/clip-stream?start=${encodeURIComponent(playStart)}&end=${encodeURIComponent(rangeEnd)}`;
+  const gen = ++clipGen;
+  clearTimeout(endTimer);
+  clearTimeout(clipAudioTimer);
+  freezeFrame();
+  stopAudio();
   playback = {
     kind: "clip",
     rangeStart,
@@ -448,23 +458,41 @@ function startClipFeed(rangeStart, rangeEnd, offsetMs = 0) {
   seekEl.max = String(Math.floor(durationMs));
   setTransport("clip");
   setPausedUi(false);
+  updateSeekUi();
+  const feedUrl = `/clip-stream?start=${encodeURIComponent(playStart)}&end=${encodeURIComponent(rangeEnd)}&_=${gen}`;
+  const audioUrl = `/clip-audio?start=${encodeURIComponent(playStart)}&end=${encodeURIComponent(rangeEnd)}`;
   rawLink.href = feedUrl;
   rawLink.textContent = "Open /clip-stream";
-  playFeed(feedUrl, `/clip-audio?start=${encodeURIComponent(playStart)}&end=${encodeURIComponent(rangeEnd)}`);
-  clearTimeout(endTimer);
-  endTimer = setTimeout(() => {
-    freezeFrame();
-    stopAudio();
-    stopTick();
-    if (playback) {
-      playback.paused = true;
-      playback.offsetMs = playback.durationMs;
-    }
-    setPausedUi(true);
-    updateSeekUi();
-    if (onPlaybackEnded) onPlaybackEnded();
-    else statusEl.textContent = "Clip finished";
-  }, remaining + 2000);
+  window.setTimeout(() => {
+    if (gen !== clipGen) return;
+    playFeed(feedUrl, null);
+    clipAudioTimer = window.setTimeout(() => {
+      if (gen !== clipGen || playback?.paused) return;
+      startPcmAudio(audioUrl);
+    }, 900);
+    endTimer = window.setTimeout(() => {
+      if (gen !== clipGen) return;
+      freezeFrame();
+      stopAudio();
+      stopTick();
+      if (playback) {
+        playback.paused = true;
+        playback.offsetMs = playback.durationMs;
+      }
+      setPausedUi(true);
+      updateSeekUi();
+      if (onPlaybackEnded) onPlaybackEnded();
+      else statusEl.textContent = "Clip finished";
+    }, remaining + 2000);
+  }, 450);
+}
+
+function seekTo(offsetMs) {
+  if (!playback || playback.kind !== "clip") return;
+  const { rangeStart, rangeEnd } = playback;
+  const pos = offsetMs;
+  clearTimeout(clipSeekTimer);
+  clipSeekTimer = window.setTimeout(() => startClipFeed(rangeStart, rangeEnd, pos), 180);
 }
 
 function pausePlayback() {
@@ -493,11 +521,6 @@ function togglePlayback() {
   if (!playback) return;
   if (playback.paused) resumePlayback();
   else pausePlayback();
-}
-
-function seekTo(offsetMs) {
-  if (!playback || playback.kind !== "clip") return;
-  startClipFeed(playback.rangeStart, playback.rangeEnd, offsetMs);
 }
 
 function skipBy(ms) {
@@ -1330,43 +1353,49 @@ function prefetchFacePage(page) {
   const start = page * facesPageSize;
   const end = start + facesPageSize;
   fetch(
-    `/api/faces?start=${start}&end=${end}&offset=${start}&limit=${facesPageSize}&names=1${camQuery(facesCam)}${facesFilterQuery()}`,
+    `/api/faces?start=${start}&end=${end}&offset=${start}&limit=${facesPageSize}${camQuery(facesCam)}${facesFilterQuery()}`,
     { cache: "no-store" },
   ).catch(() => {});
 }
 
-async function loadFaces() {
+async function loadFaces(page = facesPage) {
   stopFacesPoll();
+  const from = facesPage;
+  facesPage = page;
   const limit = syncFacesPageSize();
   if (!facesGrid.childElementCount) {
     facesEmpty.hidden = false;
     facesEmpty.textContent = "Loading snapshots…";
+  } else {
+    facesEmpty.hidden = true;
   }
   updateFacesPager();
   try {
-    const { reqId, res, data, faces, total } = await fetchFacesPage({ names: true });
+    let { reqId, res, data, faces, total } = await fetchFacesPage({ names: true });
     if (reqId !== facesFetchId) return;
+    if (res.ok && Array.isArray(faces) && total > 0 && !faces.length) {
+      const retry = await fetchFacesPage({ names: true, fresh: true });
+      if (retry.reqId !== facesFetchId) return;
+      ({ res, data, faces, total } = retry);
+    }
     facesTotal = total;
     if (facesTotal && facesPage >= facesPageCount()) {
       facesPage = facesPageCount() - 1;
       return loadFaces();
     }
-    if (!res.ok || !Array.isArray(faces)) {
-      facesEmpty.hidden = false;
-      facesEmpty.textContent = data.error || "Could not load snapshots";
+    if (!res.ok || !Array.isArray(faces) || (facesTotal > 0 && !faces.length)) {
+      facesPage = from;
       updateFacesPager();
+      if (!facesGrid.childElementCount) {
+        facesEmpty.hidden = false;
+        facesEmpty.textContent = data.error || "Could not load snapshots";
+      }
       return;
     }
     if (facesTotal === 0) {
       facesGrid.replaceChildren();
       facesEmpty.hidden = false;
       facesEmpty.textContent = "No snapshots yet";
-      updateFacesPager();
-      return;
-    }
-    if (!faces.length) {
-      facesEmpty.hidden = false;
-      facesEmpty.textContent = "Could not load this page";
       updateFacesPager();
       return;
     }
@@ -1377,10 +1406,11 @@ async function loadFaces() {
     prefetchFacePage(facesPage - 1);
     if (syncFacesPageSize() !== limit) return loadFaces();
   } catch (err) {
-    if (facesFetchId && err) {
+    facesPage = from;
+    updateFacesPager();
+    if (!facesGrid.childElementCount) {
       facesEmpty.hidden = false;
       facesEmpty.textContent = String(err.message || err);
-      if (!facesGrid.childElementCount) facesGrid.replaceChildren();
     }
   } finally {
     if (!facesGallery.hidden) startFacesPoll();
@@ -1550,13 +1580,11 @@ document.getElementById("btn-import-capture").addEventListener("click", () => {
 document.getElementById("btn-close-snaps").addEventListener("click", () => snapsModal.close());
 btnFacesPrev.addEventListener("click", () => {
   if (facesPage <= 0) return;
-  facesPage -= 1;
-  loadFaces();
+  loadFaces(facesPage - 1);
 });
 btnFacesNext.addEventListener("click", () => {
   if (facesPage >= facesPageCount() - 1) return;
-  facesPage += 1;
-  loadFaces();
+  loadFaces(facesPage + 1);
 });
 
 facesCam.addEventListener("change", () => {
