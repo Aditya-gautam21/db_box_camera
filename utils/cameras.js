@@ -8,6 +8,7 @@ const cameraFile = path.join(path.dirname(fileURLToPath(import.meta.url)), "..",
 export async function loadCameras() {
   try {
     const raw = await readFile(cameraFile, "utf8");
+    if (!raw.trim()) return [];
     const data = JSON.parse(raw);
     return Array.isArray(data) ? data : [];
   } catch (err) {
