@@ -97,6 +97,7 @@ app.get("/api/faces", asyncRoute(async (req, res) => {
     mask: req.query.mask,
     expression: req.query.expression,
   });
+  res.set("Cache-Control", "no-store");
   res.json(result);
 }));
 

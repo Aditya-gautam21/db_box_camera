@@ -164,25 +164,29 @@ async function resolveNames(session, rows, camId) {
   const leftover = unnamed.filter((row) => !nameCache.has(keyOf(row.UUId)));
   const unixSec = leftover.find((row) => row.StartTime)?.StartTime;
   if (leftover.length && unixSec) {
-    const byUuid = await groupIdsForUuids(
-      session,
-      unixSec,
-      leftover.map((row) => row.UUId),
-      [...names.keys()],
-    );
-    for (const [uuid, gid] of byUuid) {
-      nameCache.set(keyOf(uuid), names.get(gid) ?? "unknown");
-    }
-    const still = leftover.filter((row) => !nameCache.has(keyOf(row.UUId)) && row.StartTime);
-    if (still.length) {
-      const stats = await recentGroupStats(session, still[0].StartTime, still.length + 8);
-      const timed = still.map((row) => ({
+    const timed = leftover
+      .filter((row) => row.StartTime)
+      .map((row) => ({
         UUId: row.UUId,
         StartTime: row.StartTime,
         EndTime: row.EndTime || row.StartTime + 5,
       }));
+    if (timed.length) {
+      const stats = await recentGroupStats(session, timed[0].StartTime, timed.length + 8);
       for (const [uuid, gid] of assignGroupsToFaces(timed, stats)) {
         if (!nameCache.has(keyOf(uuid))) nameCache.set(keyOf(uuid), names.get(gid) ?? "unknown");
+      }
+    }
+    const still = leftover.filter((row) => !nameCache.has(keyOf(row.UUId)));
+    if (still.length) {
+      const byUuid = await groupIdsForUuids(
+        session,
+        unixSec,
+        still.map((row) => row.UUId),
+        [...names.keys()],
+      );
+      for (const [uuid, gid] of byUuid) {
+        nameCache.set(keyOf(uuid), names.get(gid) ?? "unknown");
       }
     }
   }

@@ -91,6 +91,7 @@ const SNAP_PAGE_SIZE = 12;
 let facesPageSize = 10;
 let facesPage = 0;
 let facesTotal = 0;
+let facesFetchId = 0;
 let facesResizeTimer;
 let lastCamId = "";
 const snapSelected = new Set();
@@ -789,7 +790,7 @@ function makeGroupRow(group) {
   const delTd = document.createElement("td");
   const del = iconButton(
     "Delete",
-    '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M9 7V5h6v2M8 7l1 12h6l1-12"/></svg>',
+    '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M9 7V5h6v2M8 7l1 12h6l1-12"/></svg>',
   );
   del.disabled = Number(group.canDel) === 0;
   del.addEventListener("click", () => deleteGroupRow(tr, group));
@@ -798,7 +799,7 @@ function makeGroupRow(group) {
   const editTd = document.createElement("td");
   const edit = iconButton(
     "Edit",
-    '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20h4l10.5-10.5-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg>',
+    '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20h4l10.5-10.5-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg>',
   );
   edit.addEventListener("click", () => openEditGroup(group));
   editTd.append(edit);
@@ -1223,7 +1224,7 @@ function makeFaceCard(face) {
 function faceColumnCount() {
   const raw = getComputedStyle(facesGallery).getPropertyValue("--face-cols");
   const cols = Number.parseInt(raw, 10);
-  return Number.isFinite(cols) && cols > 0 ? cols : 10;
+  return Number.isFinite(cols) && cols > 0 ? cols : 5;
 }
 
 function syncFacesPageSize() {
@@ -1303,17 +1304,17 @@ async function showFaces({ push = true } = {}) {
   return loadFaces();
 }
 
-async function fetchFacesPage() {
+async function fetchFacesPage({ names = true } = {}) {
+  const reqId = ++facesFetchId;
   syncFacesPageSize();
   const start = facesPage * facesPageSize;
   const end = start + facesPageSize;
-  const res = await fetch(
-    `/api/faces?start=${start}&end=${end}&offset=${start}&limit=${facesPageSize}&names=1${camQuery(facesCam)}${facesFilterQuery()}`,
-  );
+  const qs = `/api/faces?start=${start}&end=${end}&offset=${start}&limit=${facesPageSize}${names ? "&names=1" : ""}${camQuery(facesCam)}${facesFilterQuery()}`;
+  const res = await fetch(qs, { cache: "no-store" });
   const data = await res.json();
   const faces = Array.isArray(data) ? data : data.faces;
   const total = Array.isArray(data) ? data.length : Number(data.total) || 0;
-  return { res, data, faces, total };
+  return { reqId, res, data, faces, total };
 }
 
 async function loadFaces() {
@@ -1323,7 +1324,8 @@ async function loadFaces() {
   facesEmpty.textContent = "Loading snapshots…";
   updateFacesPager();
   try {
-    const { res, data, faces, total } = await fetchFacesPage();
+    const { reqId, res, data, faces, total } = await fetchFacesPage({ names: true });
+    if (reqId !== facesFetchId) return;
     facesTotal = total;
     if (facesTotal && facesPage >= facesPageCount()) {
       facesPage = facesPageCount() - 1;
@@ -1346,8 +1348,10 @@ async function loadFaces() {
     updateFacesPager();
     if (syncFacesPageSize() !== limit) return loadFaces();
   } catch (err) {
-    facesGrid.replaceChildren();
-    facesEmpty.textContent = String(err.message || err);
+    if (facesFetchId && err) {
+      facesGrid.replaceChildren();
+      facesEmpty.textContent = String(err.message || err);
+    }
   } finally {
     if (!facesGallery.hidden) startFacesPoll();
   }
@@ -1355,7 +1359,8 @@ async function loadFaces() {
 
 async function refreshFaces() {
   if (facesPage !== 0) return;
-  const { res, faces, total } = await fetchFacesPage();
+  const { reqId, res, faces, total } = await fetchFacesPage({ names: false });
+  if (reqId !== facesFetchId) return;
   if (!res.ok || !Array.isArray(faces)) return;
   facesTotal = total;
   updateFacesPager();
@@ -1368,10 +1373,7 @@ async function refreshFaces() {
   facesEmpty.hidden = true;
   const have = [...facesGrid.querySelectorAll(".face-card")].map((el) => el.dataset.filename).join("\0");
   const incoming = faces.map((face) => face.filename).join("\0");
-  if (have === incoming) {
-    applyFaceNames(faces);
-    return;
-  }
+  if (have === incoming) return;
   const selectedStart = facesGrid.querySelector(".face-card.selected")?.dataset.start;
   renderFaceCards(faces, selectedStart);
 }
@@ -1566,7 +1568,6 @@ btnFacesFilter.addEventListener("click", (event) => {
 facesFilterForm.addEventListener("click", (event) => event.stopPropagation());
 
 for (const cat of facesFilterForm.querySelectorAll(".face-features-cat")) {
-  cat.addEventListener("mouseenter", () => showFaceFeatureCat(cat.dataset.cat));
   cat.addEventListener("click", (event) => {
     if (event.target.closest("input")) return;
     showFaceFeatureCat(cat.dataset.cat);
@@ -1588,6 +1589,9 @@ for (const box of facesFilterForm.querySelectorAll("input[name]")) {
 
 facesFilterForm.addEventListener("submit", (event) => {
   event.preventDefault();
+  for (const all of facesFilterForm.querySelectorAll("input[data-all]")) {
+    syncFaceFeatureAll(all.dataset.all);
+  }
   closeFaceFeatures();
   facesPage = 0;
   loadFaces();
