@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { getCamera } from "./cameras.js";
+import { getCamera } from "./addCamera.js";
 
 const execFileAsync = promisify(execFile);
 const curlBin = "/usr/bin/curl";

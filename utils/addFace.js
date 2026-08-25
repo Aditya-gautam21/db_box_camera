@@ -1,5 +1,5 @@
-import { getSession } from "./camera_session.js";
-import { groupMap } from "./group_data.js";
+import { getSession } from "./cameraSession.js";
+import { groupMap } from "./groupData.js";
 
 function genderValue(gender) {
   const s = String(gender ?? "").toLowerCase();

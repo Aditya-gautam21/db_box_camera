@@ -3,8 +3,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { stream, audioStream, sampleRateFromQuery } from "../utils/livestream.js";
 import { clipStream, clipAudio, saveClip } from "../utils/clips.js";
-import { listSnappedFaces, getSnapJpeg } from "../utils/fetch_faces.js";
-import { loadCameras, addCamera, getCamera, getRtspUrl, publicCameras } from "../utils/cameras.js";
+import { listSnappedFaces, getSnapJpeg } from "../utils/fetchFaces.js";
+import { loadCameras, addCamera, removeCamera, getCamera, getRtspUrl, publicCameras } from "../utils/addCamera.js";
+import { scanCameras } from "../utils/cameraScan.js";
 import {
   listGroups,
   addGroup,
@@ -52,6 +53,14 @@ app.post("/api/cameras", asyncRoute(async (req, res) => {
   res.json({ id: camera.id, name: camera.name });
 }));
 
+app.get("/api/cameras/scan", asyncRoute(async (_req, res) => {
+  res.json({ hosts: await scanCameras() });
+}));
+
+app.delete("/api/cameras/:id", asyncRoute(async (req, res) => {
+  res.json(await removeCamera(req.params.id));
+}));
+
 app.get("/stream/:cam", asyncRoute(async (req, res) => {
   const cam = await getCamera(req.params.cam);
   if (!cam) {
@@ -82,6 +91,11 @@ app.get("/api/faces", asyncRoute(async (req, res) => {
     start,
     end,
     names: req.query.names,
+    gender: req.query.gender,
+    age: req.query.age,
+    glasses: req.query.glasses,
+    mask: req.query.mask,
+    expression: req.query.expression,
   });
   res.json(result);
 }));

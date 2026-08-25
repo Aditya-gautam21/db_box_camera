@@ -235,15 +235,113 @@ main {
 .live-toolbar {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 0.75rem;
   flex: none;
   padding: 0.75rem 1.5rem 0;
 }
 
+#live-pager {
+  margin-right: auto;
+  padding: 0;
+}
+
 #btn-add-camera,
-#btn-camera-save {
+#btn-camera-save,
+#btn-faces-filter-apply {
   color: #1a140c;
   background: var(--accent);
   border: 0;
+}
+
+.face-features {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.face-features > .cam-pick {
+  margin: 0;
+}
+
+#btn-faces-filter {
+  height: 36px;
+  min-width: 160px;
+  padding: 0 0.7rem;
+  text-align: left;
+  color: var(--text);
+  background: #0d0c0b;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.face-features-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  width: 360px;
+  padding: 0;
+  color: var(--text);
+  background: #141210;
+  border: 1px solid var(--accent);
+  box-shadow: var(--shadow);
+}
+
+.face-features-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-height: 220px;
+}
+
+.face-features-cats {
+  border-right: 1px solid var(--line);
+}
+
+.face-features-cat {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.7rem;
+  cursor: pointer;
+  font-size: 0.88rem;
+}
+
+.face-features-cat.active {
+  color: #1a140c;
+  background: var(--accent);
+}
+
+.face-features-cat span:nth-of-type(1) {
+  flex: 1;
+}
+
+.face-features-arrow {
+  opacity: 0.7;
+}
+
+.face-features-subs {
+  padding: 0.35rem 0;
+}
+
+.face-features-sub label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 0.88rem;
+  color: var(--text);
+}
+
+#btn-faces-filter-apply {
+  width: 100%;
+  height: 40px;
+  border-radius: 0;
 }
 
 #live-dash {
@@ -287,6 +385,41 @@ main {
 .camera-modal h3 {
   margin: 0 0 0.2rem;
   font-size: 1.15rem;
+}
+
+.camera-scan {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+#btn-camera-scan {
+  color: var(--text);
+  background: #1c1916;
+  border: 1px solid var(--line);
+}
+
+#cam-scan-status {
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+
+.cam-scan-list {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 8rem;
+  overflow: auto;
+}
+
+.cam-scan-list button {
+  width: 100%;
+  text-align: left;
+  color: var(--text);
+  background: #1c1916;
+  border: 1px solid var(--line);
 }
 
 .camera-modal-actions {
@@ -348,6 +481,18 @@ main {
   font-size: 0.75rem;
   letter-spacing: 0;
   text-transform: none;
+  border-radius: 10px;
+}
+
+.live-tile-remove {
+  height: 32px;
+  padding: 0 0.75rem;
+  font-size: 0.75rem;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+  background: #1c1916;
+  border: 1px solid var(--line);
   border-radius: 10px;
 }
 

@@ -42,6 +42,15 @@ export async function addCamera(name, host, username, password) {
   return camera;
 }
 
+export async function removeCamera(id) {
+  if (!id) throw new Error("camera id required");
+  const cameras = await loadCameras();
+  const next = cameras.filter((cam) => cam.id !== id);
+  if (next.length === cameras.length) throw new Error("unknown camera");
+  await writeFile(cameraFile, `${JSON.stringify(next, null, 2)}\n`);
+  return { id };
+}
+
 export function getRtspUrl(cam, subtype = 0) {
   const user = encodeURIComponent(cam.username);
   const pass = encodeURIComponent(cam.password);

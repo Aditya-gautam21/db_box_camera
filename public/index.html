@@ -52,6 +52,11 @@
 
       <section id="live-page" hidden>
         <div class="live-toolbar">
+          <div class="face-pager" id="live-pager" hidden>
+            <button type="button" id="btn-live-prev" class="icon-btn" aria-label="Previous cameras">‹</button>
+            <span id="live-page-label">0 / 0</span>
+            <button type="button" id="btn-live-next" class="icon-btn" aria-label="Next cameras">›</button>
+          </div>
           <button type="button" id="btn-add-camera">Add camera</button>
         </div>
         <div id="live-dash"></div>
@@ -60,6 +65,11 @@
       <dialog id="camera-modal" class="camera-modal">
         <form id="camera-form">
           <h3>Add camera</h3>
+          <div class="camera-scan">
+            <button type="button" id="btn-camera-scan">Scan</button>
+            <span id="cam-scan-status"></span>
+          </div>
+          <ul id="cam-scan-list" class="cam-scan-list" hidden></ul>
           <label>Name <input id="cam-name" type="text" required autocomplete="off" /></label>
           <label>IP address <input id="cam-host" type="text" required autocomplete="off" placeholder="192.168.1.2" /></label>
           <label>Username <input id="cam-user" type="text" required autocomplete="off" /></label>
@@ -103,6 +113,70 @@
               Camera
               <select id="faces-cam" aria-label="Camera"></select>
             </label>
+            <div class="face-features" id="faces-filter">
+              <span class="cam-pick">Face features</span>
+              <button type="button" id="btn-faces-filter">Please Select</button>
+              <form id="faces-filter-form" class="face-features-menu" hidden>
+                <div class="face-features-cols">
+                  <div class="face-features-cats">
+                    <div class="face-features-cat active" data-cat="gender">
+                      <input type="checkbox" data-all="gender" aria-label="All gender" />
+                      <span>Gender</span>
+                      <span class="face-features-arrow">›</span>
+                    </div>
+                    <div class="face-features-cat" data-cat="age">
+                      <input type="checkbox" data-all="age" aria-label="All ages" />
+                      <span>Age</span>
+                      <span class="face-features-arrow">›</span>
+                    </div>
+                    <div class="face-features-cat" data-cat="mask">
+                      <input type="checkbox" data-all="mask" aria-label="All mask" />
+                      <span>Mask</span>
+                      <span class="face-features-arrow">›</span>
+                    </div>
+                    <div class="face-features-cat" data-cat="glasses">
+                      <input type="checkbox" data-all="glasses" aria-label="All glasses" />
+                      <span>Glasses</span>
+                      <span class="face-features-arrow">›</span>
+                    </div>
+                    <div class="face-features-cat" data-cat="expression">
+                      <input type="checkbox" data-all="expression" aria-label="All expression" />
+                      <span>Expression</span>
+                      <span class="face-features-arrow">›</span>
+                    </div>
+                  </div>
+                  <div class="face-features-subs">
+                    <div class="face-features-sub" data-sub="gender">
+                      <label><input type="checkbox" name="gender" value="male" /> Male</label>
+                      <label><input type="checkbox" name="gender" value="female" /> Female</label>
+                    </div>
+                    <div class="face-features-sub" data-sub="age" hidden>
+                      <label><input type="checkbox" name="age" value="under_18" /> Under 18</label>
+                      <label><input type="checkbox" name="age" value="18_25" /> 18–25</label>
+                      <label><input type="checkbox" name="age" value="26_30" /> 26–30</label>
+                      <label><input type="checkbox" name="age" value="31_35" /> 31–35</label>
+                      <label><input type="checkbox" name="age" value="36_40" /> 36–40</label>
+                      <label><input type="checkbox" name="age" value="41_50" /> 41–50</label>
+                      <label><input type="checkbox" name="age" value="over_50" /> Over 50</label>
+                    </div>
+                    <div class="face-features-sub" data-sub="mask" hidden>
+                      <label><input type="checkbox" name="mask" value="unmasked" /> Unmasked</label>
+                      <label><input type="checkbox" name="mask" value="masked" /> Masked</label>
+                    </div>
+                    <div class="face-features-sub" data-sub="glasses" hidden>
+                      <label><input type="checkbox" name="glasses" value="not_wearing" /> Not wearing</label>
+                      <label><input type="checkbox" name="glasses" value="wearing" /> Wearing</label>
+                    </div>
+                    <div class="face-features-sub" data-sub="expression" hidden>
+                      <label><input type="checkbox" name="expression" value="expressionless" /> Expressionless</label>
+                      <label><input type="checkbox" name="expression" value="smile" /> Smile</label>
+                      <label><input type="checkbox" name="expression" value="laugh" /> Laugh</label>
+                    </div>
+                  </div>
+                </div>
+                <button type="submit" id="btn-faces-filter-apply">Search</button>
+              </form>
+            </div>
             <p id="faces-empty">Loading snapshots…</p>
             <div class="face-pager">
               <button type="button" id="btn-faces-prev" class="icon-btn" aria-label="Previous">‹</button>

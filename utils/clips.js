@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
 import { stream, audioStream } from "./livestream.js";
-import { env } from "./camera_session.js";
+import { env } from "./cameraSession.js";
 
 function camAuth() {
   return {

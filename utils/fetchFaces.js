@@ -1,8 +1,33 @@
-import { getSession } from "./camera_session.js";
-import { assignGroupsToFaces, groupMap, recentGroupStats } from "./group_data.js";
+import { getSession } from "./cameraSession.js";
+import { assignGroupsToFaces, groupIdsForUuids, groupMap, recentGroupStats } from "./groupData.js";
 
 const nameCache = new Map();
 const MAX_PAGE = 40;
+
+const GENDER = { male: 0, female: 1 };
+const AGE = { under_18: 0, "18_25": 1, "26_30": 2, "31_35": 3, "36_40": 4, "41_50": 5, over_50: 6 };
+const MASK = { unmasked: 0, masked: 1 };
+const GLASSES = { not_wearing: 0, wearing: 1 };
+const EXPRESSION = { expressionless: 0, smile: 1, laugh: 2 };
+
+function asList(value) {
+  if (value == null || value === "") return [];
+  return (Array.isArray(value) ? value : String(value).split(","))
+    .map((item) => String(item).trim())
+    .filter(Boolean);
+}
+
+function codes(value, table) {
+  const out = [];
+  for (const item of asList(value)) {
+    if (Object.hasOwn(table, item)) out.push(table[item]);
+    else {
+      const n = Number(item);
+      if (Number.isFinite(n)) out.push(n);
+    }
+  }
+  return [...new Set(out)];
+}
 
 function today() {
   const d = new Date();
@@ -48,7 +73,19 @@ function pageRange({ offset = 0, limit, start, end }, total) {
   return { startIndex, endIndex, count: endIndex - startIndex };
 }
 
-export async function listSnappedFaces({ cam, offset = 0, limit, start, end, names } = {}) {
+export async function listSnappedFaces({
+  cam,
+  offset = 0,
+  limit,
+  start,
+  end,
+  names,
+  gender,
+  age,
+  glasses,
+  mask,
+  expression,
+} = {}) {
   const session = await getSession(cam);
   const camId = session.id;
   const date = today();
@@ -58,10 +95,15 @@ export async function listSnappedFaces({ cam, offset = 0, limit, start, end, nam
     EndTime: `${date} 23:59:59`,
     Chn: 0,
     AlarmGroup: [],
+    Expression: codes(expression, EXPRESSION),
+    FaceInfo: [],
+    fAttrAge: codes(age, AGE),
+    Gender: codes(gender, GENDER),
+    GlassesType: codes(glasses, GLASSES),
+    MouthMask: codes(mask, MASK),
     Similarity: 0,
     Engine: 1,
     Count: 0,
-    FaceInfo: [],
   });
   const total = search.data?.Count ?? 0;
   if (!total) return { faces: [], total: 0 };
@@ -119,20 +161,34 @@ async function resolveNames(session, rows, camId) {
     const gid = groupIdFromRow(row);
     if (gid != null && names.has(gid)) nameCache.set(keyOf(row.UUId), names.get(gid));
   }
-  const leftover = unnamed.filter((row) => !nameCache.has(keyOf(row.UUId)) && row.StartTime);
-  if (leftover.length) {
-    const stats = await recentGroupStats(session, leftover[0].StartTime, leftover.length + 8);
-    const timed = leftover.map((row) => ({
-      UUId: row.UUId,
-      StartTime: row.StartTime,
-      EndTime: row.EndTime || row.StartTime + 5,
-    }));
-    for (const [uuid, gid] of assignGroupsToFaces(timed, stats)) {
+  const leftover = unnamed.filter((row) => !nameCache.has(keyOf(row.UUId)));
+  const unixSec = leftover.find((row) => row.StartTime)?.StartTime;
+  if (leftover.length && unixSec) {
+    const byUuid = await groupIdsForUuids(
+      session,
+      unixSec,
+      leftover.map((row) => row.UUId),
+      [...names.keys()],
+    );
+    for (const [uuid, gid] of byUuid) {
       nameCache.set(keyOf(uuid), names.get(gid) ?? "unknown");
     }
+    const still = leftover.filter((row) => !nameCache.has(keyOf(row.UUId)) && row.StartTime);
+    if (still.length) {
+      const stats = await recentGroupStats(session, still[0].StartTime, still.length + 8);
+      const timed = still.map((row) => ({
+        UUId: row.UUId,
+        StartTime: row.StartTime,
+        EndTime: row.EndTime || row.StartTime + 5,
+      }));
+      for (const [uuid, gid] of assignGroupsToFaces(timed, stats)) {
+        if (!nameCache.has(keyOf(uuid))) nameCache.set(keyOf(uuid), names.get(gid) ?? "unknown");
+      }
+    }
   }
+  const stranger = names.get(4) || "unknown";
   for (const row of unnamed) {
-    if (!nameCache.has(keyOf(row.UUId))) nameCache.set(keyOf(row.UUId), "unknown");
+    if (!nameCache.has(keyOf(row.UUId))) nameCache.set(keyOf(row.UUId), stranger);
   }
 }
 
