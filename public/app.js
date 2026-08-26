@@ -22,6 +22,7 @@ const groupsPage = document.getElementById("groups-page");
 const facesGrid = document.getElementById("faces-grid");
 const facesEmpty = document.getElementById("faces-empty");
 const facesCam = document.getElementById("faces-cam");
+const facesDate = document.getElementById("faces-date");
 const snapsCam = document.getElementById("snaps-cam");
 const facesPageEl = document.getElementById("faces-page");
 const btnFacesPrev = document.getElementById("btn-faces-prev");
@@ -282,6 +283,40 @@ function cameraName(cam) {
 function camQuery(select) {
   const id = select?.value;
   return id ? `&cam=${encodeURIComponent(id)}` : "";
+}
+
+function localDateValue(date = new Date()) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}`;
+}
+
+function facesDateValue() {
+  return facesDate?.value || localDateValue();
+}
+
+function facesDateQuery() {
+  const v = facesDateValue();
+  return v ? `&date=${encodeURIComponent(v)}` : "";
+}
+
+function syncFacesDateUi() {
+  if (!facesDate) return;
+  const today = localDateValue();
+  if (!facesDate.value) facesDate.value = today;
+  facesDate.max = today;
+  const next = document.getElementById("btn-faces-date-next");
+  if (next) next.disabled = facesDate.value >= today;
+}
+
+function shiftFacesDate(days) {
+  const d = new Date(`${facesDateValue()}T12:00:00`);
+  d.setDate(d.getDate() + days);
+  const next = localDateValue(d);
+  if (next > localDateValue()) return;
+  facesDate.value = next;
+  syncFacesDateUi();
+  facesPage = 0;
+  loadFaces();
 }
 
 function facesFilterQuery() {
@@ -1171,7 +1206,7 @@ async function loadCapturedSnaps() {
   updateSnapPager();
   try {
     const res = await fetch(
-      `/api/faces?start=${snapPage * SNAP_PAGE_SIZE}&end=${(snapPage + 1) * SNAP_PAGE_SIZE}&offset=${snapPage * SNAP_PAGE_SIZE}&limit=${SNAP_PAGE_SIZE}${camQuery(snapsCam)}`,
+      `/api/faces?start=${snapPage * SNAP_PAGE_SIZE}&end=${(snapPage + 1) * SNAP_PAGE_SIZE}&offset=${snapPage * SNAP_PAGE_SIZE}&limit=${SNAP_PAGE_SIZE}${camQuery(snapsCam)}${facesDateQuery()}`,
     );
     const data = await res.json();
     if (reqId !== snapFetchId) return;
@@ -1197,13 +1232,13 @@ async function loadCapturedSnaps() {
     const prev = snapPage - 1;
     if (next < snapPageCount()) {
       fetch(
-        `/api/faces?start=${next * SNAP_PAGE_SIZE}&end=${(next + 1) * SNAP_PAGE_SIZE}&offset=${next * SNAP_PAGE_SIZE}&limit=${SNAP_PAGE_SIZE}${camQuery(snapsCam)}`,
+        `/api/faces?start=${next * SNAP_PAGE_SIZE}&end=${(next + 1) * SNAP_PAGE_SIZE}&offset=${next * SNAP_PAGE_SIZE}&limit=${SNAP_PAGE_SIZE}${camQuery(snapsCam)}${facesDateQuery()}`,
         { cache: "no-store" },
       ).catch(() => {});
     }
     if (prev >= 0) {
       fetch(
-        `/api/faces?start=${prev * SNAP_PAGE_SIZE}&end=${(prev + 1) * SNAP_PAGE_SIZE}&offset=${prev * SNAP_PAGE_SIZE}&limit=${SNAP_PAGE_SIZE}${camQuery(snapsCam)}`,
+        `/api/faces?start=${prev * SNAP_PAGE_SIZE}&end=${(prev + 1) * SNAP_PAGE_SIZE}&offset=${prev * SNAP_PAGE_SIZE}&limit=${SNAP_PAGE_SIZE}${camQuery(snapsCam)}${facesDateQuery()}`,
         { cache: "no-store" },
       ).catch(() => {});
     }
@@ -1324,6 +1359,7 @@ async function showFaces({ push = true } = {}) {
     showPlayer: false,
   });
   stopView();
+  syncFacesDateUi();
   try {
     await fillCamSelect(facesCam);
   } catch (err) {
@@ -1340,7 +1376,7 @@ async function fetchFacesPage({ names = true, track = true, fresh = false } = {}
   syncFacesPageSize();
   const start = facesPage * facesPageSize;
   const end = start + facesPageSize;
-  const qs = `/api/faces?start=${start}&end=${end}&offset=${start}&limit=${facesPageSize}${names ? "&names=1" : ""}${fresh ? "&fresh=1" : ""}${camQuery(facesCam)}${facesFilterQuery()}`;
+  const qs = `/api/faces?start=${start}&end=${end}&offset=${start}&limit=${facesPageSize}${names ? "&names=1" : ""}${fresh ? "&fresh=1" : ""}${camQuery(facesCam)}${facesDateQuery()}${facesFilterQuery()}`;
   const res = await fetch(qs, { cache: "no-store" });
   const data = await res.json();
   const faces = Array.isArray(data) ? data : data.faces;
@@ -1353,7 +1389,7 @@ function prefetchFacePage(page) {
   const start = page * facesPageSize;
   const end = start + facesPageSize;
   fetch(
-    `/api/faces?start=${start}&end=${end}&offset=${start}&limit=${facesPageSize}${camQuery(facesCam)}${facesFilterQuery()}`,
+    `/api/faces?start=${start}&end=${end}&offset=${start}&limit=${facesPageSize}${camQuery(facesCam)}${facesDateQuery()}${facesFilterQuery()}`,
     { cache: "no-store" },
   ).catch(() => {});
 }
@@ -1370,10 +1406,11 @@ async function loadFaces(page = facesPage) {
     facesEmpty.hidden = true;
   }
   updateFacesPager();
+  let poll = false;
   try {
     let { reqId, res, data, faces, total } = await fetchFacesPage({ names: true });
     if (reqId !== facesFetchId) return;
-    if (res.ok && Array.isArray(faces) && total > 0 && !faces.length) {
+    if (!res.ok || (Array.isArray(faces) && total > 0 && !faces.length)) {
       const retry = await fetchFacesPage({ names: true, fresh: true });
       if (retry.reqId !== facesFetchId) return;
       ({ res, data, faces, total } = retry);
@@ -1397,6 +1434,7 @@ async function loadFaces(page = facesPage) {
       facesEmpty.hidden = false;
       facesEmpty.textContent = "No snapshots yet";
       updateFacesPager();
+      poll = true;
       return;
     }
     facesEmpty.hidden = true;
@@ -1405,6 +1443,7 @@ async function loadFaces(page = facesPage) {
     prefetchFacePage(facesPage + 1);
     prefetchFacePage(facesPage - 1);
     if (syncFacesPageSize() !== limit) return loadFaces();
+    poll = true;
   } catch (err) {
     facesPage = from;
     updateFacesPager();
@@ -1412,16 +1451,25 @@ async function loadFaces(page = facesPage) {
       facesEmpty.hidden = false;
       facesEmpty.textContent = String(err.message || err);
     }
-  } finally {
-    if (!facesGallery.hidden) startFacesPoll();
   }
+  if (poll && !facesGallery.hidden && facesDateValue() === localDateValue()) startFacesPoll();
 }
 
 async function refreshFaces() {
   if (facesPage !== 0) return;
-  const { reqId, res, faces, total } = await fetchFacesPage({ names: false, track: false, fresh: true });
+  if (facesDateValue() !== localDateValue()) return;
+  let res, faces, total, reqId;
+  try {
+    ({ reqId, res, faces, total } = await fetchFacesPage({ names: false, track: false, fresh: true }));
+  } catch {
+    stopFacesPoll();
+    return;
+  }
   if (reqId !== facesFetchId) return;
-  if (!res.ok || !Array.isArray(faces)) return;
+  if (!res.ok || !Array.isArray(faces)) {
+    stopFacesPoll();
+    return;
+  }
   facesTotal = total;
   updateFacesPager();
   if (facesTotal === 0) {
@@ -1592,6 +1640,15 @@ facesCam.addEventListener("change", () => {
   facesPage = 0;
   loadFaces();
 });
+
+facesDate.addEventListener("change", () => {
+  syncFacesDateUi();
+  facesPage = 0;
+  facesGrid.replaceChildren();
+  loadFaces();
+});
+document.getElementById("btn-faces-date-prev").addEventListener("click", () => shiftFacesDate(-1));
+document.getElementById("btn-faces-date-next").addEventListener("click", () => shiftFacesDate(1));
 
 const facesFilterForm = document.getElementById("faces-filter-form");
 const btnFacesFilter = document.getElementById("btn-faces-filter");

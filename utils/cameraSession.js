@@ -27,9 +27,15 @@ function parseCsrf(hdr) {
   return v;
 }
 
+function isUnreachable(err) {
+  const code = err?.code;
+  return code === 7 || code === "7" ||
+    /Failed to connect|No route to host|Connection refused/i.test(String(err?.stderr || err?.message || ""));
+}
+
 function isDeadSession(err) {
   const code = err?.code;
-  return code === 56 || code === "56" || code === 7 ||
+  return code === 56 || code === "56" ||
     err?.message === "no_login" || err instanceof SyntaxError;
 }
 
@@ -54,31 +60,50 @@ export function createSession(cam) {
   const auth = authOf(cam);
   let cookie = "";
   let csrf = "";
+  let connectFails = 0;
+  let blockedUntil = 0;
   const hdrFile = path.join(os.tmpdir(), `cam-${auth.id}.hdr`);
   const bodyFile = path.join(os.tmpdir(), `cam-${auth.id}.body`);
 
   async function login() {
-    await execFileAsync(curlBin, [
-      "-k",
-      "--tls-max", "1.2",
-      "--digest",
-      "-u", `${auth.username}:${auth.password}`,
-      "-sS",
-      "-D", hdrFile,
-      "-o", bodyFile,
-      "-H", "Content-Type: application/json",
-      "--data-raw",
-      JSON.stringify({
-        data: {
-          support_new_schedule: true,
-          remote_terminal_info: "WEB,unknown",
-        },
-      }),
-      `https://${auth.host}/API/Web/Login`,
-    ]);
-    const hdr = fs.readFileSync(hdrFile, "utf8");
-    cookie = parseCookie(hdr);
-    csrf = parseCsrf(hdr);
+    if (Date.now() < blockedUntil) {
+      throw Object.assign(new Error(`camera unreachable: ${auth.host}`), { code: 7 });
+    }
+    try {
+      await execFileAsync(curlBin, [
+        "-k",
+        "--tls-max", "1.2",
+        "--digest",
+        "-u", `${auth.username}:${auth.password}`,
+        "-sS",
+        "-D", hdrFile,
+        "-o", bodyFile,
+        "-H", "Content-Type: application/json",
+        "--data-raw",
+        JSON.stringify({
+          data: {
+            support_new_schedule: true,
+            remote_terminal_info: "WEB,unknown",
+          },
+        }),
+        `https://${auth.host}/API/Web/Login`,
+      ]);
+      const hdr = fs.readFileSync(hdrFile, "utf8");
+      cookie = parseCookie(hdr);
+      csrf = parseCsrf(hdr);
+      connectFails = 0;
+      blockedUntil = 0;
+    } catch (err) {
+      if (isUnreachable(err)) {
+        connectFails += 1;
+        if (connectFails >= 2) {
+          blockedUntil = Date.now() + 60_000;
+          connectFails = 0;
+          console.error(`camera ${auth.host} unreachable after 2 attempts, backing off`);
+        }
+      }
+      throw err;
+    }
   }
 
   async function postNow(apiPath, data, retries = 1) {
@@ -123,7 +148,7 @@ export function createSession(cam) {
     return next;
   }
 
-  return { id: auth.id, login, post };
+  return { id: auth.id, login, post, postNow };
 }
 
 const sessions = new Map();

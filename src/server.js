@@ -92,6 +92,7 @@ app.get("/api/faces", asyncRoute(async (req, res) => {
     end,
     names: req.query.names,
     fresh: req.query.fresh,
+    date: req.query.date,
     gender: req.query.gender,
     age: req.query.age,
     glasses: req.query.glasses,

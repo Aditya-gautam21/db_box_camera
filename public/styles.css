@@ -1229,7 +1229,8 @@ body[data-page="faces"] #raw-link {
   color: var(--muted);
 }
 
-.cam-pick select {
+.cam-pick select,
+.cam-pick input[type="date"] {
   font: inherit;
   font-size: 1rem;
   color: var(--text);
@@ -1240,6 +1241,17 @@ body[data-page="faces"] #raw-link {
   min-height: 48px;
   height: 48px;
   min-width: 180px;
+}
+
+.date-pick {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.date-pick input[type="date"] {
+  min-width: 11.5rem;
+  color-scheme: dark;
 }
 
 .faces-head-tools .face-pager {

@@ -158,7 +158,7 @@ export function stream(req, res, rtspUrl, { duration } = {}) {
   if (duration) {
     enqueueClip(() => {
       if (req.destroyed || res.writableEnded) return;
-      pipeFfmpeg(req, res, MJPEG_HEADERS, clipVideoArgs(rtspUrl, duration), { retries: 2, gapMs: 600 });
+      pipeFfmpeg(req, res, MJPEG_HEADERS, clipVideoArgs(rtspUrl, duration), { retries: 1, gapMs: 600 });
     });
     return;
   }
