@@ -6,6 +6,7 @@ import { clipStream, clipAudio, saveClip } from "../utils/clips.js";
 import { listSnappedFaces, getSnapJpeg } from "../utils/fetchFaces.js";
 import { loadCameras, addCamera, removeCamera, getCamera, getRtspUrl, publicCameras } from "../utils/addCamera.js";
 import { scanCameras } from "../utils/cameraScan.js";
+import { getLineCross, saveLineCross, clearLineCross } from "../utils/lineCross.js";
 import {
   listGroups,
   addGroup,
@@ -59,6 +60,26 @@ app.get("/api/cameras/scan", asyncRoute(async (_req, res) => {
 
 app.delete("/api/cameras/:id", asyncRoute(async (req, res) => {
   res.json(await removeCamera(req.params.id));
+}));
+
+app.get("/api/line-cross", asyncRoute(async (_req, res) => {
+  res.json(await getLineCross());
+}));
+
+app.put("/api/line-cross", asyncRoute(async (req, res) => {
+  try {
+    res.json(await saveLineCross(req.body ?? {}));
+  } catch (err) {
+    if (err.status) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+}));
+
+app.delete("/api/line-cross", asyncRoute(async (_req, res) => {
+  res.json(await clearLineCross());
 }));
 
 app.get("/stream/:cam", asyncRoute(async (req, res) => {

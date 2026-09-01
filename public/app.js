@@ -100,6 +100,9 @@ let facesFetchId = 0;
 let facesResizeTimer;
 let lastCamId = "";
 const snapSelected = new Set();
+let lineCross = { a: null, b: null, side: null };
+let lineDraw = null;
+const LINE_HINTS = ["Tap first end of the line", "Tap the other end", "Tap the entering side"];
 
 function localInputValue(date) {
   const p = (n) => String(n).padStart(2, "0");
@@ -248,6 +251,7 @@ function startLiveFeed(cam = "eng") {
 }
 
 function stopLiveDash() {
+  stopLineDraw();
   for (const img of liveDash.querySelectorAll("img")) img.removeAttribute("src");
   liveDash.replaceChildren();
 }
@@ -266,6 +270,7 @@ function openLiveTile(tile) {
 function onLiveTileFullscreen() {
   const tile = focusedLiveTile();
   if (!tile) {
+    if (lineDraw) stopLineDraw();
     if (document.body.dataset.page === "live") stopAudio();
     return;
   }
@@ -274,6 +279,7 @@ function onLiveTileFullscreen() {
   statusEl.textContent = `Live · ${label}`;
   modeLabel.textContent = `Live · ${label}`;
   startPcmAudio(`/stream-audio/${cam}`);
+  layoutLineOverlay(tile);
 }
 
 function cameraName(cam) {
@@ -358,6 +364,147 @@ async function fillCamSelect(select, selectedId) {
   return cams;
 }
 
+function linePts() {
+  if (lineDraw) return lineDraw.pts;
+  const pts = [];
+  if (lineCross.a) pts.push(lineCross.a);
+  if (lineCross.b) pts.push(lineCross.b);
+  if (lineCross.side) pts.push(lineCross.side);
+  return pts;
+}
+
+function imageContentBox(img) {
+  const ir = img.getBoundingClientRect();
+  const nw = img.naturalWidth;
+  const nh = img.naturalHeight;
+  if (!(nw > 0 && nh > 0)) {
+    return { left: ir.left, top: ir.top, width: ir.width, height: ir.height };
+  }
+  const scale = Math.min(ir.width / nw, ir.height / nh) || 1;
+  const dw = nw * scale;
+  const dh = nh * scale;
+  return {
+    left: ir.left + (ir.width - dw) / 2,
+    top: ir.top + (ir.height - dh) / 2,
+    width: dw,
+    height: dh,
+  };
+}
+
+function videoNormFromClick(img, clientX, clientY) {
+  const box = imageContentBox(img);
+  if (box.width < 2 || box.height < 2) return null;
+  const x = (clientX - box.left) / box.width;
+  const y = (clientY - box.top) / box.height;
+  if (x < -0.08 || x > 1.08 || y < -0.08 || y > 1.08) return null;
+  return [Math.min(1, Math.max(0, x)), Math.min(1, Math.max(0, y))];
+}
+
+function paintLineSvg(svg, pts) {
+  const ns = "http://www.w3.org/2000/svg";
+  svg.replaceChildren();
+  if (pts.length >= 2) {
+    const line = document.createElementNS(ns, "line");
+    line.setAttribute("x1", pts[0][0]);
+    line.setAttribute("y1", pts[0][1]);
+    line.setAttribute("x2", pts[1][0]);
+    line.setAttribute("y2", pts[1][1]);
+    svg.append(line);
+  }
+  for (const [i, p] of pts.entries()) {
+    const c = document.createElementNS(ns, "circle");
+    c.setAttribute("cx", p[0]);
+    c.setAttribute("cy", p[1]);
+    c.setAttribute("r", i === 2 ? "0.02" : "0.014");
+    if (i === 2) c.classList.add("side");
+    svg.append(c);
+  }
+}
+
+function layoutLineOverlay(tile) {
+  const img = tile.querySelector("img");
+  const svg = tile.querySelector("svg.live-line");
+  if (!img || !svg) return;
+  const tr = tile.getBoundingClientRect();
+  const box = imageContentBox(img);
+  svg.style.left = `${box.left - tr.left}px`;
+  svg.style.top = `${box.top - tr.top}px`;
+  svg.style.width = `${box.width}px`;
+  svg.style.height = `${box.height}px`;
+  paintLineSvg(svg, linePts());
+  const hint = tile.querySelector(".live-line-hint");
+  if (hint) hint.textContent = lineDraw?.tile === tile ? LINE_HINTS[lineDraw.pts.length] || LINE_HINTS[0] : "";
+}
+
+function layoutAllLineOverlays() {
+  for (const tile of liveDash.querySelectorAll(".live-tile")) layoutLineOverlay(tile);
+}
+
+function stopLineDraw() {
+  if (!lineDraw) return;
+  lineDraw.tile.classList.remove("drawing");
+  lineDraw = null;
+  layoutAllLineOverlays();
+}
+
+function startLineDraw(tile) {
+  if (lineDraw?.tile === tile) {
+    stopLineDraw();
+    statusEl.textContent = "Line draw cancelled";
+    return;
+  }
+  stopLineDraw();
+  lineDraw = { tile, pts: [] };
+  tile.classList.add("drawing");
+  statusEl.textContent = LINE_HINTS[0];
+  layoutLineOverlay(tile);
+  if (focusedLiveTile() !== tile) {
+    const enter = tile.requestFullscreen || tile.webkitRequestFullscreen;
+    enter?.call(tile);
+  }
+}
+
+async function saveDrawnLine(tile, pts) {
+  try {
+    const res = await fetch("/api/line-cross", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ a: pts[0], b: pts[1], side: pts[2], cam: tile.dataset.cam }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Could not save line");
+    lineCross = data;
+    statusEl.textContent = "Tripwire saved — Python will pick it up";
+  } catch (err) {
+    statusEl.textContent = String(err.message || err);
+  }
+  stopLineDraw();
+}
+
+async function clearDrawnLine() {
+  stopLineDraw();
+  try {
+    const res = await fetch("/api/line-cross", { method: "DELETE" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Could not clear line");
+    lineCross = data;
+    layoutAllLineOverlays();
+    statusEl.textContent = "Tripwire cleared";
+  } catch (err) {
+    statusEl.textContent = String(err.message || err);
+  }
+}
+
+async function loadLineCross() {
+  try {
+    const res = await fetch("/api/line-cross");
+    if (!res.ok) return;
+    lineCross = await res.json();
+  } catch {
+    /* keep previous */
+  }
+}
+
 function makeLiveTile(cam) {
   const label = cameraName(cam);
   const tile = document.createElement("article");
@@ -367,9 +514,19 @@ function makeLiveTile(cam) {
   tile.tabIndex = 0;
   tile.setAttribute("role", "button");
   tile.setAttribute("aria-label", `${label} live view`);
+  const stage = document.createElement("div");
+  stage.className = "live-stage";
   const img = document.createElement("img");
   img.alt = label;
   img.src = `/stream/${encodeURIComponent(cam.id)}`;
+  img.addEventListener("load", () => layoutLineOverlay(tile));
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.classList.add("live-line");
+  svg.setAttribute("viewBox", "0 0 1 1");
+  svg.setAttribute("preserveAspectRatio", "none");
+  const hint = document.createElement("div");
+  hint.className = "live-line-hint";
+  stage.append(img, svg, hint);
   const bar = document.createElement("div");
   bar.className = "live-tile-bar";
   const name = document.createElement("span");
@@ -383,6 +540,22 @@ function makeLiveTile(cam) {
     event.stopPropagation();
     toggleMute();
   });
+  const lineBtn = document.createElement("button");
+  lineBtn.type = "button";
+  lineBtn.className = "live-tile-line";
+  lineBtn.textContent = "Draw line";
+  lineBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    startLineDraw(tile);
+  });
+  const clearBtn = document.createElement("button");
+  clearBtn.type = "button";
+  clearBtn.className = "live-tile-line";
+  clearBtn.textContent = "Clear line";
+  clearBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    clearDrawnLine();
+  });
   const removeBtn = document.createElement("button");
   removeBtn.type = "button";
   removeBtn.className = "live-tile-remove";
@@ -391,14 +564,33 @@ function makeLiveTile(cam) {
     event.stopPropagation();
     removeLiveCamera(cam);
   });
-  bar.append(name, muteBtn, removeBtn);
-  tile.append(img, bar);
-  tile.addEventListener("click", () => openLiveTile(tile));
+  bar.append(name, muteBtn, lineBtn, clearBtn, removeBtn);
+  tile.append(stage, bar);
+  stage.addEventListener("pointerdown", (event) => {
+    if (lineDraw?.tile !== tile) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const pt = videoNormFromClick(img, event.clientX, event.clientY);
+    if (!pt) return;
+    lineDraw.pts.push(pt);
+    layoutLineOverlay(tile);
+    if (lineDraw.pts.length >= 3) saveDrawnLine(tile, lineDraw.pts);
+    else statusEl.textContent = LINE_HINTS[lineDraw.pts.length];
+  });
+  tile.addEventListener("click", (event) => {
+    if (lineDraw?.tile === tile) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    openLiveTile(tile);
+  });
   tile.addEventListener("keydown", (event) => {
     if (event.code !== "Enter" && event.code !== "Space") return;
     event.preventDefault();
     openLiveTile(tile);
   });
+  new ResizeObserver(() => layoutLineOverlay(tile)).observe(tile);
   return tile;
 }
 
@@ -446,6 +638,7 @@ async function loadLiveDash({ goToLast = false } = {}) {
     liveCameras = cams;
     if (goToLast && cams.length) liveDashPage = livePageCount() - 1;
     else if (liveDashPage >= livePageCount()) liveDashPage = Math.max(0, livePageCount() - 1);
+    await loadLineCross();
     drawLiveWindows();
     if (cams.length === 0) {
       statusEl.textContent = "No cameras yet — add one to start";
@@ -1928,6 +2121,12 @@ seekEl.addEventListener("change", () => {
 window.addEventListener("keydown", (event) => {
   if (!(event.target instanceof Element)) return;
   if (event.target.closest("input, textarea, select")) return;
+  if (event.code === "Escape" && lineDraw) {
+    event.preventDefault();
+    stopLineDraw();
+    statusEl.textContent = "Line draw cancelled";
+    return;
+  }
   if (event.code === "Space") {
     if (event.target.closest("button, a")) return;
     if (!playback) return;
