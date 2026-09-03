@@ -118,15 +118,16 @@ export function createSession(cam) {
           "--tls-max", "1.2",
           "--http1.1",
           "-sS",
+          "--connect-timeout", "5",
+          "--max-time", "20",
           "-H", "Content-Type: application/json",
-          "-H", "Connection: close",
           "-H", `Cookie: session_443=${cookie}`,
           "-H", `X-csrftoken: ${csrf}`,
           "--data-raw",
           JSON.stringify({ version: "1.0", data }),
           `https://${auth.host}${apiPath}`,
         ],
-        { maxBuffer: 32 * 1024 * 1024 },
+        { maxBuffer: 16 * 1024 * 1024 },
       );
       const json = JSON.parse(stdout);
       if (json.error_code === "no_login" || json.error_code === "no_heartbeat") {

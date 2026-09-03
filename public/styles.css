@@ -482,46 +482,6 @@ main {
   background: #000;
 }
 
-.live-line {
-  position: absolute;
-  pointer-events: none;
-  overflow: visible;
-}
-
-.live-line line {
-  stroke: #ffe14a;
-  stroke-width: 0.01;
-  stroke-linecap: round;
-}
-
-.live-line circle {
-  fill: #ffe14a;
-}
-
-.live-line circle.side {
-  fill: #7ee2a8;
-}
-
-.live-line-hint {
-  display: none;
-  position: absolute;
-  top: 0.75rem;
-  left: 50%;
-  z-index: 3;
-  transform: translateX(-50%);
-  padding: 0.5rem 0.85rem;
-  border-radius: 10px;
-  background: rgba(8, 7, 6, 0.85);
-  color: #ffe14a;
-  font-size: 0.95rem;
-  pointer-events: none;
-  white-space: nowrap;
-}
-
-.live-tile.drawing .live-line-hint {
-  display: block;
-}
-
 .live-tile-bar {
   display: flex;
   justify-content: space-between;
@@ -537,7 +497,7 @@ main {
   text-transform: none;
 }
 
-.live-tile-line {
+.live-tile-ptz {
   display: inline-flex;
   align-items: center;
   min-height: 44px;
@@ -642,25 +602,54 @@ main {
 
 .ptz-slider-row {
   display: grid;
-  grid-template-columns: 40px 1fr 40px;
+  grid-template-columns: 40px minmax(0, 1fr) 40px;
   gap: 0.45rem;
   align-items: center;
 }
 
-.ptz-nudge {
+button.ptz-nudge,
+button[type="button"].ptz-nudge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
   width: 40px;
   height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0;
+  margin: 0;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: #1c1916;
   color: var(--text);
-  font-size: 1.2rem;
+  font-size: 1.35rem;
+  font-weight: 600;
   line-height: 1;
+  letter-spacing: 0;
+  flex-shrink: 0;
+  filter: none;
+  transform: none;
 }
 
-.ptz-nudge:hover {
+button.ptz-nudge:hover,
+button[type="button"].ptz-nudge:hover {
   border-color: var(--accent);
   color: var(--accent);
+  background: #241f1a;
+  filter: none;
+}
+
+button.ptz-nudge:active,
+button[type="button"].ptz-nudge:active {
+  transform: none;
+  filter: none;
+}
+
+button.ptz-nudge:disabled,
+button[type="button"].ptz-nudge:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .ptz-slider-row input[type="range"] {

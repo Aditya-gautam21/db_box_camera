@@ -10,12 +10,13 @@ const GLASSES = { not_wearing: 0, wearing: 1 };
 const EXPRESSION = { expressionless: 0, smile: 1, laugh: 2 };
 
 const jpegCache = new Map();
-const JPEG_CACHE_MAX = 250;
-const JPEG_CHUNK = 4;
+const JPEG_CACHE_MAX = 120;
+const JPEG_CHUNK = 6;
 const JPEG_CONCURRENCY = 2;
 const simpleInfoPref = new Map();
-const SIMPLE_INFO_TTL_MS = 60_000;
-let listSnappedSeq = 0;
+const SIMPLE_INFO_TTL_MS = 120_000;
+const groupMapCache = new Map();
+const GROUP_MAP_TTL_MS = 30_000;
 
 function asList(value) {
   if (value == null || value === "") return [];
@@ -74,18 +75,10 @@ function cacheJpeg(key, buf) {
   jpegCache.delete(jpegCache.keys().next().value);
 }
 
-function jpegDataUrl(b64) {
-  if (!b64) return null;
-  const raw = String(b64);
-  if (raw.startsWith("data:")) return raw;
-  return `data:image/jpeg;base64,${raw}`;
-}
-
 function rememberFaceJpeg(camId, uuid, b64) {
-  if (!uuid || !b64) return null;
+  if (!uuid || !b64) return;
   const raw = String(b64).replace(/^data:image\/\w+;base64,/, "");
   cacheJpeg(`${camId}:${uuid}`, Buffer.from(raw, "base64"));
-  return jpegDataUrl(b64);
 }
 
 function groupIdFromRow(row) {
@@ -114,6 +107,14 @@ function pageRange({ offset = 0, limit, start, end }, total) {
   const endIndex = Math.max(0, total - fromNewest);
   const startIndex = Math.max(0, endIndex - pageSize);
   return { startIndex, endIndex, count: endIndex - startIndex };
+}
+
+async function cachedGroupMap(session) {
+  const hit = groupMapCache.get(session.id);
+  if (hit && Date.now() - hit.at < GROUP_MAP_TTL_MS) return hit.map;
+  const map = await groupMap(session);
+  groupMapCache.set(session.id, { at: Date.now(), map });
+  return map;
 }
 
 async function fillMissingJpegs(session, rows) {
@@ -152,11 +153,19 @@ async function fillMissingJpegs(session, rows) {
   });
 }
 
-async function fetchSnapPage(session, body, simple) {
-  const page = await session.post("/API/AI/SnapedFaces/GetByIndex", { ...body, SimpleInfo: simple });
+async function fetchSnapPage(session, body, simple, withImage) {
+  const page = await session.post("/API/AI/SnapedFaces/GetByIndex", {
+    ...body,
+    SimpleInfo: simple,
+    WithFaceImage: withImage ? 1 : 0,
+  });
   return [...(page.data?.SnapedFaceInfo ?? [])].reverse();
 }
 
+/**
+ * Honeywell GetByIndex: prefer SimpleInfo=0 so Group comes on the row.
+ * Pull JPEGs in the same call when cheap; fall back to GetById fill.
+ */
 async function getSnapRows(session, startIndex, count) {
   const body = {
     MsgId: "",
@@ -164,7 +173,6 @@ async function getSnapRows(session, startIndex, count) {
     MatchedFaces: 0,
     StartIndex: startIndex,
     Count: count,
-    WithFaceImage: 0,
     WithBodyImage: 0,
     WithBackgroud: 0,
     WithFeature: 0,
@@ -173,9 +181,11 @@ async function getSnapRows(session, startIndex, count) {
   const camId = session.id;
   const pref = simpleInfoPref.get(camId);
   const cached = pref && Date.now() - pref.at < SIMPLE_INFO_TTL_MS ? pref.value : null;
-  const order = cached == null ? [1, 0] : [cached];
+  const order = cached == null ? [0, 1] : [cached];
+
   for (const simple of order) {
-    const rows = await fetchSnapPage(session, body, simple);
+    const withImage = simple === 0;
+    const rows = await fetchSnapPage(session, body, simple, withImage);
     if (rows.length) {
       simpleInfoPref.set(camId, { value: simple, at: Date.now() });
       return rows;
@@ -183,7 +193,7 @@ async function getSnapRows(session, startIndex, count) {
   }
   if (cached != null) {
     const other = cached === 1 ? 0 : 1;
-    const rows = await fetchSnapPage(session, body, other);
+    const rows = await fetchSnapPage(session, body, other, other === 0);
     if (rows.length) {
       simpleInfoPref.set(camId, { value: other, at: Date.now() });
       return rows;
@@ -193,15 +203,15 @@ async function getSnapRows(session, startIndex, count) {
 }
 
 /**
- * Honeywell name resolution for a page of snaps:
- * 1. Group id on the snap row → FDGroup name
- * 2. FaceStatistics time-join for the day
- * 3. Per-group SnapedFaces Search + GetByIndex UUID match
- * 4. leftover → Stranger
+ * Honeywell name resolution:
+ * 1. Group on snap row → FDGroup name
+ * 2. FaceStatistics time-join
+ * 3. Per-group UUID Search (only leftovers)
+ * 4. Stranger
  */
 async function resolveNames(session, rows) {
   const names = new Map();
-  const groups = await groupMap(session);
+  const groups = await cachedGroupMap(session);
   const stranger = groups.get(4) || "Stranger";
   const unnamed = rows.filter((row) => row.UUId);
 
@@ -223,7 +233,7 @@ async function resolveNames(session, rows) {
         EndTime: row.EndTime || row.StartTime + 5,
       }));
     if (timed.length) {
-      const stats = await recentGroupStats(session, timed[0].StartTime, Math.max(80, timed.length + 8));
+      const stats = await recentGroupStats(session, timed[0].StartTime, Math.min(60, Math.max(24, timed.length * 3)));
       for (const [uuid, gid] of assignGroupsToFaces(timed, stats)) {
         if (gid && gid !== 4 && groups.has(gid)) names.set(uuid, groups.get(gid));
       }
@@ -249,14 +259,7 @@ async function resolveNames(session, rows) {
 }
 
 export async function listSnappedFaces(opts = {}) {
-  const seq = ++listSnappedSeq;
-  const tag = `listSnappedFaces #${seq}`;
-  console.time(tag);
-  try {
-    return await listSnappedFacesWork(opts);
-  } finally {
-    console.timeEnd(tag);
-  }
+  return listSnappedFacesWork(opts);
 }
 
 async function listSnappedFacesWork({
@@ -277,7 +280,6 @@ async function listSnappedFacesWork({
   const camId = session.id;
   const date = dayKey(day);
 
-  // 1) Search — same filters Honeywell uses for Capture / Face Search
   const searchBody = {
     MsgId: "",
     StartTime: `${date} 00:00:00`,
@@ -301,14 +303,11 @@ async function listSnappedFacesWork({
   const { startIndex, count } = pageRange({ offset, limit, start, end }, total);
   if (!count) return { faces: [], total };
 
-  // 2) Page rows (newest-first UI → reverse GetByIndex order)
   const faces = await getSnapRows(session, startIndex, count);
   if (!faces.length) return { total, startIndex, count, faces: [] };
 
-  // 3) JPEG fill
   await fillMissingJpegs(session, faces);
 
-  // 4) Name match (fresh each request; expect ~1–2s)
   const wantNames = names === true || names === "1";
   let nameByUuid = new Map();
   if (wantNames) {
@@ -326,14 +325,11 @@ async function listSnappedFacesWork({
     faces: faces.map((row) => {
       const uuid = row.UUId;
       const startTime = row.StartTime ? cameraStamp(row.StartTime) : null;
-      const cached = jpegCache.get(`${camId}:${uuid}`);
-      const url =
-        rememberFaceJpeg(camId, uuid, row.FaceImage) ||
-        (cached ? `data:image/jpeg;base64,${cached.toString("base64")}` : `/api/snaps/${encodeURIComponent(uuid)}?cam=${encodeURIComponent(camId)}`);
+      if (row.FaceImage) rememberFaceJpeg(camId, uuid, row.FaceImage);
       return {
         uuid,
         filename: uuid,
-        url,
+        url: `/api/snaps/${encodeURIComponent(uuid)}?cam=${encodeURIComponent(camId)}`,
         name: nameByUuid.get(uuid) || (wantNames ? "Stranger" : "unknown"),
         start: startTime,
         end: row.StartTime ? cameraStamp(row.StartTime + 5 * 60) : null,

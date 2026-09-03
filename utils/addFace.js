@@ -1,5 +1,15 @@
 import { getSession } from "./cameraSession.js";
+import { loadCameras } from "./addCamera.js";
 import { groupMap } from "./groupData.js";
+
+const FD_GET = {
+  MsgId: null,
+  TypeFlags: 1,
+  DefaultVal: 0,
+  WithInternal: 0,
+  SimpleInfo: 0,
+  GroupsId: [],
+};
 
 function genderValue(gender) {
   const s = String(gender ?? "").toLowerCase();
@@ -15,25 +25,8 @@ function stripDataUrl(value) {
   return m ? m[1] : s;
 }
 
-export async function getGrpId(list) {
-  const names = await groupMap(await getSession());
-  const want = String(list).toLowerCase();
-  for (const [id, name] of names) {
-    if (String(name).toLowerCase() === want) return id;
-  }
-  throw new Error(`unknown group: ${list}`);
-}
-
-export async function listGroups() {
-  const res = await (await getSession()).post("/API/AI/FDGroup/Get", {
-    MsgId: null,
-    TypeFlags: 1,
-    DefaultVal: 0,
-    WithInternal: 0,
-    SimpleInfo: 0,
-    GroupsId: [],
-  });
-  return (res.data?.Group ?? []).map((g) => ({
+function mapGroup(g) {
+  return {
     id: g.Id,
     name: g.Name,
     canDel: g.CanDel,
@@ -43,92 +36,217 @@ export async function listGroups() {
     detectType: g.DetectType,
     enableAlarm: g.EnableAlarm,
     enableChnAlarm: g.EnableChnAlarm,
-  }));
+  };
+}
+
+function nameKey(name) {
+  return String(name || "").trim().toLowerCase();
+}
+
+async function fetchRawGroups(session) {
+  const res = await session.post("/API/AI/FDGroup/Get", FD_GET);
+  return res.data?.Group ?? [];
+}
+
+/**
+ * Cameras that expose a usable face-group DB (FDGroup/Get returns groups).
+ * Unreachable / non-AI / unlicensed cameras are skipped.
+ */
+export async function faceDbTargets() {
+  const cams = await loadCameras();
+  const out = [];
+  for (const cam of cams) {
+    try {
+      const session = await getSession(cam.id);
+      const groups = await fetchRawGroups(session);
+      if (!Array.isArray(groups) || groups.length === 0) continue;
+      out.push({ cam, session, groups });
+    } catch {
+      /* no face DB on this camera */
+    }
+  }
+  return out;
+}
+
+async function mapFaceDb(fn) {
+  const targets = await faceDbTargets();
+  if (!targets.length) throw new Error("no cameras with a face database");
+  const results = [];
+  for (const target of targets) {
+    try {
+      const value = await fn(target);
+      results.push({ cam: target.cam.id, name: target.cam.name, ok: true, value });
+    } catch (err) {
+      results.push({
+        cam: target.cam.id,
+        name: target.cam.name,
+        ok: false,
+        error: err.message || String(err),
+      });
+    }
+  }
+  if (!results.some((r) => r.ok)) {
+    throw new Error(results.map((r) => `${r.name}: ${r.error}`).join("; ") || "all cameras failed");
+  }
+  return { targets, results };
+}
+
+function findRawGroup(groups, { id, matchName }) {
+  const gid = Number(id);
+  const key = nameKey(matchName);
+  if (key) {
+    const byName = groups.find((g) => nameKey(g.Name) === key);
+    if (byName) return byName;
+  }
+  if (Number.isFinite(gid)) {
+    return groups.find((g) => Number(g.Id) === gid) ?? null;
+  }
+  return null;
+}
+
+export async function getGrpId(list) {
+  const names = await groupMap(await getSession());
+  const want = String(list).toLowerCase();
+  for (const [id, name] of names) {
+    if (String(name).toLowerCase() === want) return id;
+  }
+  throw new Error(`unknown group: ${list}`);
+}
+
+/** Merged face groups across all face-DB cameras (matched by name). */
+export async function listGroups() {
+  const targets = await faceDbTargets();
+  if (!targets.length) return [];
+
+  const byName = new Map();
+  for (const { cam, groups } of targets) {
+    for (const g of groups) {
+      const key = nameKey(g.Name);
+      if (!key) continue;
+      const hit = byName.get(key);
+      if (!hit) {
+        byName.set(key, { ...mapGroup(g), cameras: [cam.name || cam.id] });
+      } else {
+        hit.cameras.push(cam.name || cam.id);
+      }
+    }
+  }
+
+  const ordered = [];
+  const seen = new Set();
+  for (const g of targets[0].groups) {
+    const key = nameKey(g.Name);
+    const row = byName.get(key);
+    if (!row || seen.has(key)) continue;
+    seen.add(key);
+    ordered.push(row);
+  }
+  for (const [key, row] of byName) {
+    if (seen.has(key)) continue;
+    ordered.push(row);
+  }
+  return ordered;
 }
 
 export async function modifyGroup(id, fields = {}) {
-  const gid = Number(id);
-  if (!Number.isFinite(gid)) throw new Error("group id required");
-  const res = await (await getSession()).post("/API/AI/FDGroup/Get", {
-    MsgId: null,
-    TypeFlags: 1,
-    DefaultVal: 0,
-    WithInternal: 0,
-    SimpleInfo: 0,
-    GroupsId: [],
+  const { results } = await mapFaceDb(async ({ session, groups }) => {
+    const current = findRawGroup(groups, { id, matchName: fields.matchName });
+    if (!current) throw new Error("group not found");
+    const group = { ...current, Id: current.Id };
+    if (fields.name != null) {
+      const trimmed = String(fields.name).trim();
+      if (!trimmed) throw new Error("group name required");
+      group.Name = trimmed;
+    }
+    if (fields.similarity != null && fields.similarity !== "") {
+      group.Similarity = Number(fields.similarity);
+    }
+    if (fields.enabled != null && fields.enabled !== "") {
+      group.Enabled = Number(fields.enabled) ? 1 : 0;
+    }
+    if (fields.enableAlarm != null && fields.enableAlarm !== "") {
+      group.EnableAlarm = Number(fields.enableAlarm) ? 1 : 0;
+    }
+    if (fields.policy != null && fields.policy !== "") {
+      group.Policy = Number(fields.policy);
+    }
+    if (fields.detectType != null && fields.detectType !== "") {
+      group.DetectType = Number(fields.detectType);
+    }
+    const mod = await session.post("/API/AI/FDGroup/Modify", { Group: [group] });
+    const result = mod.data?.Result;
+    if (Array.isArray(result) && result[0] !== 0) {
+      throw new Error("group update failed");
+    }
+    return mapGroup(group);
   });
-  const current = (res.data?.Group ?? []).find((g) => Number(g.Id) === gid);
-  if (!current) throw new Error(`group ${id} not found`);
-  const group = { ...current, Id: gid };
-  if (fields.name != null) {
-    const trimmed = String(fields.name).trim();
-    if (!trimmed) throw new Error("group name required");
-    group.Name = trimmed;
-  }
-  if (fields.similarity != null && fields.similarity !== "") {
-    group.Similarity = Number(fields.similarity);
-  }
-  if (fields.enabled != null && fields.enabled !== "") {
-    group.Enabled = Number(fields.enabled) ? 1 : 0;
-  }
-  if (fields.enableAlarm != null && fields.enableAlarm !== "") {
-    group.EnableAlarm = Number(fields.enableAlarm) ? 1 : 0;
-  }
-  if (fields.policy != null && fields.policy !== "") {
-    group.Policy = Number(fields.policy);
-  }
-  if (fields.detectType != null && fields.detectType !== "") {
-    group.DetectType = Number(fields.detectType);
-  }
-  const mod = await (await getSession()).post("/API/AI/FDGroup/Modify", {
-    Group: [group],
-  });
-  const result = mod.data?.Result;
-  if (Array.isArray(result) && result[0] !== 0) {
-    throw new Error("group update failed");
-  }
+
+  const primary = results.find((r) => r.ok)?.value;
   return {
-    id: gid,
-    name: group.Name,
-    similarity: group.Similarity,
-    enabled: group.Enabled,
-    enableAlarm: group.EnableAlarm,
-    policy: group.Policy,
-    detectType: group.DetectType,
+    ...primary,
+    id: primary?.id ?? Number(id),
+    cameras: results.filter((r) => r.ok).length,
+    results,
   };
 }
 
 export async function addGroup(name) {
   const trimmed = String(name || "").trim();
   if (!trimmed) throw new Error("group name required");
-  const res = await (await getSession()).post("/API/AI/FDGroup/Add", {
-    MsgId: null,
-    Group: [
-      {
-        Name: trimmed,
-        Policy: 0,
-        DetectType: 0,
-        Similarity: 70,
-        CanDel: 1,
-        Enabled: 1,
-        EnableAlarm: 1,
-        EnableChnAlarm: [1],
-        Id: -1,
-      },
-    ],
+  const key = nameKey(trimmed);
+
+  const { results } = await mapFaceDb(async ({ session, groups }) => {
+    const existing = groups.find((g) => nameKey(g.Name) === key);
+    if (existing) return { id: existing.Id, name: existing.Name, existed: true };
+
+    const res = await session.post("/API/AI/FDGroup/Add", {
+      MsgId: null,
+      Group: [
+        {
+          Name: trimmed,
+          Policy: 0,
+          DetectType: 0,
+          Similarity: 70,
+          CanDel: 1,
+          Enabled: 1,
+          EnableAlarm: 1,
+          EnableChnAlarm: [1],
+          Id: -1,
+        },
+      ],
+    });
+    const g = res.data?.Group?.[0];
+    if (g?.Id == null) throw new Error("group add failed");
+    return { id: g.Id, name: g.Name, existed: false };
   });
-  const g = res.data?.Group?.[0];
-  if (g?.Id == null) throw new Error("group add failed");
-  return { id: g.Id, name: g.Name };
+
+  const primary = results.find((r) => r.ok)?.value;
+  return {
+    id: primary.id,
+    name: primary.name,
+    cameras: results.filter((r) => r.ok).length,
+    results,
+  };
 }
 
-export async function removeGroup(id) {
-  const res = await (await getSession()).post("/API/AI/FDGroup/Remove", {
-    MsgId: null,
-    Group: [{ Id: Number(id) }],
+export async function removeGroup(id, { name } = {}) {
+  const { results } = await mapFaceDb(async ({ session, groups }) => {
+    const current = findRawGroup(groups, { id, matchName: name });
+    if (!current) throw new Error("group not found");
+    if (Number(current.CanDel) === 0) throw new Error("group cannot be deleted");
+    const res = await session.post("/API/AI/FDGroup/Remove", {
+      MsgId: null,
+      Group: [{ Id: Number(current.Id) }],
+    });
+    if (res.error_code) throw new Error(res.error_code);
+    return { id: Number(current.Id), name: current.Name };
   });
-  if (res.error_code) throw new Error(res.error_code);
-  return { id: Number(id) };
+
+  return {
+    id: Number(id),
+    cameras: results.filter((r) => r.ok).length,
+    results,
+  };
 }
 
 function mapFace(row) {

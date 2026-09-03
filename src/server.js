@@ -6,7 +6,6 @@ import { clipStream, clipAudio, saveClip } from "../utils/clips.js";
 import { listSnappedFaces, getSnapJpeg } from "../utils/fetchFaces.js";
 import { loadCameras, addCamera, updateCamera, removeCamera, getCamera, getRtspUrl, publicCameras } from "../utils/addCamera.js";
 import { scanCameras } from "../utils/cameraScan.js";
-import { getLineCross, saveLineCross, clearLineCross } from "../utils/lineCross.js";
 import {
   detectPtz,
   getPtzState,
@@ -156,26 +155,6 @@ app.post("/api/cameras/:id/ptz/refresh", asyncRoute(async (req, res) => {
   }
 }));
 
-app.get("/api/line-cross", asyncRoute(async (_req, res) => {
-  res.json(await getLineCross());
-}));
-
-app.put("/api/line-cross", asyncRoute(async (req, res) => {
-  try {
-    res.json(await saveLineCross(req.body ?? {}));
-  } catch (err) {
-    if (err.status) {
-      res.status(err.status).json({ error: err.message });
-      return;
-    }
-    throw err;
-  }
-}));
-
-app.delete("/api/line-cross", asyncRoute(async (_req, res) => {
-  res.json(await clearLineCross());
-}));
-
 app.get("/stream/:cam", asyncRoute(async (req, res) => {
   const cam = await getCamera(req.params.cam);
   if (!cam) {
@@ -236,7 +215,7 @@ app.patch("/api/groups/:id", asyncRoute(async (req, res) => {
 }));
 
 app.delete("/api/groups/:id", asyncRoute(async (req, res) => {
-  res.json(await removeGroup(req.params.id));
+  res.json(await removeGroup(req.params.id, { name: req.query.name }));
 }));
 
 app.get("/api/groups/:id/faces", asyncRoute(async (req, res) => {

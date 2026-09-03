@@ -14,7 +14,12 @@ const PCM_HEADERS = {
   Connection: "close",
 };
 
-function pipeFfmpeg(req, res, headers, args, { retries = 0, gapMs = 500 } = {}) {
+/** Live encode — main stream in, browser MJPEG out. */
+const LIVE_VF = "fps=12,scale=960:-2,format=yuv420p";
+/** Clip encode. */
+const CLIP_VF = "fps=12,scale=960:-2,format=yuv420p";
+
+function pipeFfmpeg(req, res, headers, args, { retries = 0, gapMs = 400 } = {}) {
   res.set(headers);
   let ff;
   let stopped = false;
@@ -27,7 +32,7 @@ function pipeFfmpeg(req, res, headers, args, { retries = 0, gapMs = 500 } = {}) 
 
   const start = (attempt) => {
     if (stopped || res.writableEnded) return;
-    ff = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "inherit"] });
+    ff = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "ignore"] });
     ff.stdout.pipe(res, { end: false });
     ff.on("exit", (code) => {
       try {
@@ -53,6 +58,7 @@ function liveVideoArgs(rtspUrl) {
   return [
     "-hide_banner",
     "-loglevel", "fatal",
+    "-threads", "1",
     "-rtsp_transport", "tcp",
     "-fflags", "nobuffer",
     "-flags", "low_delay",
@@ -60,9 +66,10 @@ function liveVideoArgs(rtspUrl) {
     "-analyzeduration", "0",
     "-i", rtspUrl,
     "-an",
-    "-vf", "fps=12,scale=960:-2,format=yuv420p",
+    "-threads", "1",
+    "-vf", LIVE_VF,
     "-f", "mpjpeg",
-    "-q:v", "8",
+    "-q:v", "5",
     "pipe:1",
   ];
 }
@@ -71,15 +78,17 @@ function clipVideoArgs(rtspUrl, duration) {
   const args = [
     "-hide_banner",
     "-loglevel", "fatal",
+    "-threads", "1",
     "-rtsp_transport", "tcp",
-    "-timeout", "10000000",
-    "-probesize", "5000000",
-    "-analyzeduration", "5000000",
+    "-timeout", "8000000",
+    "-probesize", "1000000",
+    "-analyzeduration", "1000000",
     "-fflags", "+genpts",
     "-i", rtspUrl,
     "-map", "0:v:0?",
     "-an",
-    "-vf", "fps=12,scale=960:-2,format=yuv420p",
+    "-threads", "1",
+    "-vf", CLIP_VF,
     "-f", "mpjpeg",
     "-q:v", "5",
   ];
@@ -92,10 +101,11 @@ function audioArgs(rtspUrl, { duration, sampleRate = 48000 } = {}) {
   const args = [
     "-hide_banner",
     "-loglevel", "fatal",
+    "-threads", "1",
     "-rtsp_transport", "tcp",
-    "-timeout", "10000000",
-    "-probesize", "2000000",
-    "-analyzeduration", "2000000",
+    "-timeout", "8000000",
+    "-probesize", "500000",
+    "-analyzeduration", "500000",
     "-i", rtspUrl,
     "-vn",
     "-ac", "1",
@@ -112,7 +122,7 @@ function joinHub(key, req, res, headers, args) {
   res.set(headers);
   let hub = hubs.get(key);
   if (!hub) {
-    const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "inherit"] });
+    const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "ignore"] });
     hub = { proc, viewers: new Set() };
     hubs.set(key, hub);
     proc.stdout.on("data", (chunk) => {
@@ -156,10 +166,7 @@ export function sampleRateFromQuery(req) {
 
 export function stream(req, res, rtspUrl, { duration } = {}) {
   if (duration) {
-    enqueueClip(() => {
-      if (req.destroyed || res.writableEnded) return;
-      pipeFfmpeg(req, res, MJPEG_HEADERS, clipVideoArgs(rtspUrl, duration), { retries: 1, gapMs: 600 });
-    });
+    pipeFfmpeg(req, res, MJPEG_HEADERS, clipVideoArgs(rtspUrl, duration), { retries: 1, gapMs: 400 });
     return;
   }
   joinHub(`v:${rtspUrl}`, req, res, MJPEG_HEADERS, liveVideoArgs(rtspUrl));
@@ -168,19 +175,8 @@ export function stream(req, res, rtspUrl, { duration } = {}) {
 export function audioStream(req, res, rtspUrl, { duration, sampleRate = 48000 } = {}) {
   const args = audioArgs(rtspUrl, { duration, sampleRate });
   if (duration) {
-    enqueueClip(() => {
-      if (req.destroyed || res.writableEnded) return;
-      pipeFfmpeg(req, res, PCM_HEADERS, args, { retries: 1, gapMs: 600 });
-    });
+    pipeFfmpeg(req, res, PCM_HEADERS, args, { retries: 1, gapMs: 400 });
     return;
   }
   joinHub(`a:${rtspUrl}:${sampleRate}`, req, res, PCM_HEADERS, args);
-}
-
-let clipGate = Promise.resolve();
-function enqueueClip(start) {
-  clipGate = clipGate
-    .then(() => new Promise((resolve) => setTimeout(resolve, 400)))
-    .then(start, start)
-    .catch(() => {});
 }

@@ -122,7 +122,7 @@ export async function getPtzProgress(camId, channel = DEFAULT_CHANNEL) {
   };
 }
 
-async function waitForZoom(camId, channel, targetZoom, { pollMs = 2000, timeoutMs = 20000 } = {}) {
+async function waitForZoom(camId, channel, targetZoom, { pollMs = 750, timeoutMs = 16000 } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     await sleep(pollMs);
@@ -132,7 +132,7 @@ async function waitForZoom(camId, channel, targetZoom, { pollMs = 2000, timeoutM
   return getPtzPosition(camId, channel);
 }
 
-async function waitForFocusChange(camId, channel, startFocus, { pollMs = 2000, timeoutMs = 15000 } = {}) {
+async function waitForFocusChange(camId, channel, startFocus, { pollMs = 750, timeoutMs = 12000 } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     await sleep(pollMs);
@@ -156,8 +156,8 @@ export async function setZoom(camId, zoom, {
   focusStep = 1,
   zoomStep = 1,
   speed = DEFAULT_SPEED,
-  pollMs = 2000,
-  timeoutMs = 20000,
+  pollMs = 750,
+  timeoutMs = 16000,
 } = {}) {
   const { channel: ch } = await requirePtzCamera(camId);
   const target = Number(zoom);
@@ -182,8 +182,8 @@ export async function setFocus(camId, focus, {
   focusStep = 1,
   zoomStep = 1,
   speed = DEFAULT_SPEED,
-  pollMs = 2000,
-  timeoutMs = 15000,
+  pollMs = 750,
+  timeoutMs = 12000,
 } = {}) {
   const { channel: ch } = await requirePtzCamera(camId);
   const target = Number(focus);
@@ -209,8 +209,8 @@ export async function autoFocus(camId, {
   zoomStep = 1,
   speed = DEFAULT_SPEED,
   state = "",
-  pollMs = 2000,
-  timeoutMs = 15000,
+  pollMs = 750,
+  timeoutMs = 12000,
 } = {}) {
   const { channel: ch } = await requirePtzCamera(camId);
 
@@ -234,8 +234,8 @@ export async function restorePtz(camId, {
   focusStep = 1,
   zoomStep = 1,
   speed = DEFAULT_SPEED,
-  pollMs = 2000,
-  timeoutMs = 20000,
+  pollMs = 750,
+  timeoutMs = 16000,
 } = {}) {
   const { channel: ch } = await requirePtzCamera(camId);
 

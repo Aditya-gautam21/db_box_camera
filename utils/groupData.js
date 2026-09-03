@@ -51,7 +51,7 @@ export async function groupIdsForUuids(session, unixSec, uuids, groupIds) {
   if (want.size === 0) return found;
   const { start, end } = dayBounds(unixSec);
   for (const gid of groupIds) {
-    if (gid === 4) continue; // Stranger = leftover, not a unique person
+    if (gid === 4) continue;
     if (found.size === want.size) break;
     const search = await session.post("/API/AI/SnapedFaces/Search", {
       MsgId: "",
@@ -64,9 +64,9 @@ export async function groupIdsForUuids(session, unixSec, uuids, groupIds) {
       Count: 0,
       FaceInfo: [],
     });
-    const total = search.data.Count ?? 0;
+    const total = search.data?.Count ?? 0;
     if (!total) continue;
-    const take = Math.min(80, total);
+    const take = Math.min(40, total);
     const page = await session.post("/API/AI/SnapedFaces/GetByIndex", {
       MsgId: "",
       Engine: 1,
@@ -80,7 +80,7 @@ export async function groupIdsForUuids(session, unixSec, uuids, groupIds) {
       WithFeature: 0,
       NeedTime: 0,
     });
-    for (const row of page.data.SnapedFaceInfo ?? []) {
+    for (const row of page.data?.SnapedFaceInfo ?? []) {
       if (want.has(row.UUId) && !found.has(row.UUId)) found.set(row.UUId, gid);
     }
   }
