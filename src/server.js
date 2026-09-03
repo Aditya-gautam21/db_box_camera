@@ -4,9 +4,18 @@ import { fileURLToPath } from "node:url";
 import { stream, audioStream, sampleRateFromQuery } from "../utils/livestream.js";
 import { clipStream, clipAudio, saveClip } from "../utils/clips.js";
 import { listSnappedFaces, getSnapJpeg } from "../utils/fetchFaces.js";
-import { loadCameras, addCamera, removeCamera, getCamera, getRtspUrl, publicCameras } from "../utils/addCamera.js";
+import { loadCameras, addCamera, updateCamera, removeCamera, getCamera, getRtspUrl, publicCameras } from "../utils/addCamera.js";
 import { scanCameras } from "../utils/cameraScan.js";
 import { getLineCross, saveLineCross, clearLineCross } from "../utils/lineCross.js";
+import {
+  detectPtz,
+  getPtzState,
+  setZoom,
+  setFocus,
+  autoFocus,
+  restorePtz,
+  refreshPtz,
+} from "../utils/zoom.js";
 import {
   listGroups,
   addGroup,
@@ -37,8 +46,25 @@ function asyncRoute(fn) {
 
 app.get("/api/health", (_req, res) => res.json({ message: "Node is up" }));
 
+async function ensurePtzFlags(cameras) {
+  const out = [];
+  for (const cam of cameras) {
+    if (typeof cam.ptz === "boolean") {
+      out.push(cam);
+      continue;
+    }
+    try {
+      const caps = await detectPtz(cam.id, cam.ptzChannel || "CH1");
+      out.push(await updateCamera(cam.id, caps));
+    } catch {
+      out.push(await updateCamera(cam.id, { ptz: false }));
+    }
+  }
+  return out;
+}
+
 app.get("/api/cameras", asyncRoute(async (_req, res) => {
-  res.json(publicCameras(await loadCameras()));
+  res.json(publicCameras(await ensurePtzFlags(await loadCameras())));
 }));
 
 app.post("/api/cameras", asyncRoute(async (req, res) => {
@@ -51,7 +77,14 @@ app.post("/api/cameras", asyncRoute(async (req, res) => {
     return;
   }
   const camera = await addCamera(name, host, username, password);
-  res.json({ id: camera.id, name: camera.name });
+  let caps;
+  try {
+    caps = await detectPtz(camera.id);
+  } catch {
+    caps = { ptz: false };
+  }
+  const saved = await updateCamera(camera.id, caps);
+  res.json(publicCameras([saved])[0]);
 }));
 
 app.get("/api/cameras/scan", asyncRoute(async (_req, res) => {
@@ -60,6 +93,67 @@ app.get("/api/cameras/scan", asyncRoute(async (_req, res) => {
 
 app.delete("/api/cameras/:id", asyncRoute(async (req, res) => {
   res.json(await removeCamera(req.params.id));
+}));
+
+app.get("/api/cameras/:id/ptz", asyncRoute(async (req, res) => {
+  try {
+    res.json(await getPtzState(req.params.id));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+}));
+
+app.post("/api/cameras/:id/ptz/zoom", asyncRoute(async (req, res) => {
+  try {
+    res.json(await setZoom(req.params.id, req.body?.zoom, {
+      zoomStep: req.body?.zoomStep,
+      focusStep: req.body?.focusStep,
+      speed: req.body?.speed,
+    }));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+}));
+
+app.post("/api/cameras/:id/ptz/focus", asyncRoute(async (req, res) => {
+  try {
+    res.json(await setFocus(req.params.id, req.body?.focus, {
+      zoomStep: req.body?.zoomStep,
+      focusStep: req.body?.focusStep,
+      speed: req.body?.speed,
+    }));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+}));
+
+app.post("/api/cameras/:id/ptz/autofocus", asyncRoute(async (req, res) => {
+  try {
+    res.json(await autoFocus(req.params.id, {
+      zoomStep: req.body?.zoomStep,
+      focusStep: req.body?.focusStep,
+      speed: req.body?.speed,
+      state: req.body?.state,
+    }));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+}));
+
+app.post("/api/cameras/:id/ptz/restore", asyncRoute(async (req, res) => {
+  try {
+    res.json(await restorePtz(req.params.id));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+}));
+
+app.post("/api/cameras/:id/ptz/refresh", asyncRoute(async (req, res) => {
+  try {
+    res.json(await refreshPtz(req.params.id));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
 }));
 
 app.get("/api/line-cross", asyncRoute(async (_req, res) => {
@@ -112,7 +206,6 @@ app.get("/api/faces", asyncRoute(async (req, res) => {
     start,
     end,
     names: req.query.names,
-    fresh: req.query.fresh,
     date: req.query.date,
     gender: req.query.gender,
     age: req.query.age,
@@ -187,38 +280,59 @@ app.get(["/live", "/clip", "/faces", "/groups"], (_req, res) => {
   res.sendFile(path.join(publicDir, "index.html"));
 });
 
-app.get("/clip-stream", (req, res) => {
-  const { start, end } = req.query;
+app.get("/clip-stream", asyncRoute(async (req, res) => {
+  const { start, end, cam } = req.query;
   if (!start || !end) {
     res.status(400).send("start and end query params required");
     return;
   }
-  clipStream(req, res, start, end);
-});
+  try {
+    await clipStream(req, res, { cam, start, end });
+  } catch (err) {
+    if (err.status) {
+      res.status(err.status).send(err.message);
+      return;
+    }
+    throw err;
+  }
+}));
 
-app.get("/clip-audio", (req, res) => {
-  const { start, end } = req.query;
+app.get("/clip-audio", asyncRoute(async (req, res) => {
+  const { start, end, cam } = req.query;
   if (!start || !end) {
     res.status(400).send("start and end query params required");
     return;
   }
-  clipAudio(req, res, start, end, sampleRateFromQuery(req));
-});
+  try {
+    await clipAudio(req, res, {
+      cam,
+      start,
+      end,
+      sampleRate: sampleRateFromQuery(req),
+    });
+  } catch (err) {
+    if (err.status) {
+      res.status(err.status).send(err.message);
+      return;
+    }
+    throw err;
+  }
+}));
 
-app.get("/save-clip", async (req, res) => {
-  const { start, end } = req.query;
+app.get("/save-clip", asyncRoute(async (req, res) => {
+  const { start, end, cam } = req.query;
   if (!start || !end) {
     res.status(400).json({ error: "start and end query params required" });
     return;
   }
   try {
-    const file = await saveClip({ start, end, outDir: clipsDir });
+    const file = await saveClip({ cam, start, end, outDir: clipsDir });
     res.json({ file: `/clips/${path.basename(file)}` });
   } catch (err) {
     console.error("save clip failed", err);
-    res.status(500).json({ error: String(err.message || err) });
+    res.status(err.status || 500).json({ error: String(err.message || err) });
   }
-});
+}));
 
 app.use((err, _req, res, _next) => {
   console.error(err);

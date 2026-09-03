@@ -82,6 +82,7 @@ let audioGain;
 let audioNextTime = 0;
 let muted = false;
 let playback = null;
+let clipFirstFrameHandler = null;
 let seekDragging = false;
 let onPlaybackEnded = null;
 let facesPoll;
@@ -173,7 +174,7 @@ function formatClock(ms) {
 
 function currentPos() {
   if (!playback || playback.kind !== "clip") return 0;
-  if (playback.paused) return playback.offsetMs;
+  if (playback.paused || playback.startedAt == null) return playback.offsetMs;
   return Math.min(playback.durationMs, playback.offsetMs + (performance.now() - playback.startedAt));
 }
 
@@ -218,8 +219,7 @@ function setPausedUi(paused) {
 function setTransport(kind) {
   transport.hidden = !kind;
   transport.classList.toggle("live", kind === "live");
-  if (kind === "clip") startTick();
-  else stopTick();
+  if (kind !== "clip") stopTick();
 }
 
 function playFeed(videoUrl, audioUrl) {
@@ -235,6 +235,10 @@ function stopView() {
   clearTimeout(endTimer);
   stopTick();
   stopAudio();
+  if (clipFirstFrameHandler) {
+    view.removeEventListener("load", clipFirstFrameHandler);
+    clipFirstFrameHandler = null;
+  }
   view.removeAttribute("src");
   playback = null;
   onPlaybackEnded = null;
@@ -505,12 +509,200 @@ async function loadLineCross() {
   }
 }
 
+function fillStepSelect(select, steps, preferred = 1) {
+  select.replaceChildren();
+  const list = Array.isArray(steps) && steps.length ? steps : [1, 5, 20];
+  for (const step of list) {
+    const opt = document.createElement("option");
+    opt.value = String(step);
+    opt.textContent = String(step);
+    select.append(opt);
+  }
+  select.value = list.includes(preferred) ? String(preferred) : String(list[0]);
+}
+
+function applyPtzSliders(panel, pos) {
+  if (!panel || !pos) return;
+  const zoom = panel.querySelector("[data-ptz-zoom]");
+  const focus = panel.querySelector("[data-ptz-focus]");
+  if (zoom && pos.zoom_slider != null) zoom.value = String(pos.zoom_slider);
+  if (focus && pos.focus_slider != null) focus.value = String(pos.focus_slider);
+}
+
+async function ptzPost(camId, action, body = {}) {
+  const res = await fetch(`/api/cameras/${encodeURIComponent(camId)}/ptz/${action}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `PTZ ${action} failed`);
+  return data;
+}
+
+async function syncPtzPanel(tile) {
+  const panel = tile.querySelector(".ptz-panel");
+  if (!panel || panel.dataset.busy === "1") return;
+  try {
+    const res = await fetch(`/api/cameras/${encodeURIComponent(tile.dataset.cam)}/ptz`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Could not load PTZ");
+    applyPtzSliders(panel, data);
+  } catch (err) {
+    statusEl.textContent = String(err.message || err);
+  }
+}
+
+function makePtzPanel(cam, tile) {
+  const panel = document.createElement("aside");
+  panel.className = "ptz-panel";
+  panel.hidden = true;
+  panel.addEventListener("click", (event) => event.stopPropagation());
+  panel.addEventListener("pointerdown", (event) => event.stopPropagation());
+
+  const head = document.createElement("div");
+  head.className = "ptz-panel-head";
+  head.textContent = "PTZ";
+
+  const body = document.createElement("div");
+  body.className = "ptz-panel-body";
+
+  function makeAxis(kind, label, min, max, steps) {
+    const wrap = document.createElement("div");
+    wrap.className = "ptz-axis";
+    const title = document.createElement("div");
+    title.className = "ptz-axis-title";
+    title.textContent = label;
+    const row = document.createElement("div");
+    row.className = "ptz-axis-row";
+    const stepLabel = document.createElement("label");
+    stepLabel.className = "ptz-step";
+    stepLabel.append("Step ");
+    const stepSelect = document.createElement("select");
+    stepSelect.dataset[`ptz${kind}Step`] = "1";
+    fillStepSelect(stepSelect, steps);
+    stepLabel.append(stepSelect);
+    const controls = document.createElement("div");
+    controls.className = "ptz-slider-row";
+    const minus = document.createElement("button");
+    minus.type = "button";
+    minus.className = "ptz-nudge";
+    minus.textContent = "−";
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.min = String(min ?? 0);
+    slider.max = String(max ?? 0);
+    slider.value = String(min ?? 0);
+    slider.dataset[`ptz${kind}`] = "1";
+    const plus = document.createElement("button");
+    plus.type = "button";
+    plus.className = "ptz-nudge";
+    plus.textContent = "+";
+    const nudge = (dir) => {
+      const step = Number(stepSelect.value) || 1;
+      const next = Math.min(Number(slider.max), Math.max(Number(slider.min), Number(slider.value) + dir * step));
+      slider.value = String(next);
+      slider.dispatchEvent(new Event("change"));
+    };
+    minus.addEventListener("click", () => nudge(-1));
+    plus.addEventListener("click", () => nudge(1));
+    controls.append(minus, slider, plus);
+    row.append(stepLabel, controls);
+    wrap.append(title, row);
+    return { wrap, slider, stepSelect };
+  }
+
+  const zoomAxis = makeAxis("Zoom", "ZOOM", cam.zoomMin, cam.zoomMax, cam.zoomSteps);
+  const focusAxis = makeAxis("Focus", "FOCUS", cam.focusMin, cam.focusMax, cam.focusSteps);
+
+  const actions = document.createElement("div");
+  actions.className = "ptz-actions";
+  const mkAction = (label, action) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ptz-action";
+    btn.textContent = label;
+    btn.dataset.ptzAction = action;
+    return btn;
+  };
+  actions.append(
+    mkAction("AutoFocus", "autofocus"),
+    mkAction("Restore", "restore"),
+    mkAction("Refresh", "refresh"),
+  );
+
+  body.append(zoomAxis.wrap, focusAxis.wrap, actions);
+  panel.append(head, body);
+
+  let busy = false;
+  const setBusy = (on) => {
+    busy = on;
+    panel.dataset.busy = on ? "1" : "0";
+    for (const el of panel.querySelectorAll("button, input, select")) el.disabled = on;
+  };
+
+  const run = async (fn) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const pos = await fn();
+      applyPtzSliders(panel, pos);
+    } catch (err) {
+      statusEl.textContent = String(err.message || err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  zoomAxis.slider.addEventListener("change", () => {
+    run(() => ptzPost(cam.id, "zoom", {
+      zoom: Number(zoomAxis.slider.value),
+      zoomStep: Number(zoomAxis.stepSelect.value) || 1,
+      focusStep: Number(focusAxis.stepSelect.value) || 1,
+    }));
+  });
+  focusAxis.slider.addEventListener("change", () => {
+    run(() => ptzPost(cam.id, "focus", {
+      focus: Number(focusAxis.slider.value),
+      zoomStep: Number(zoomAxis.stepSelect.value) || 1,
+      focusStep: Number(focusAxis.stepSelect.value) || 1,
+    }));
+  });
+  for (const btn of actions.querySelectorAll("[data-ptz-action]")) {
+    btn.addEventListener("click", () => {
+      const action = btn.dataset.ptzAction;
+      run(() => ptzPost(cam.id, action, {
+        zoomStep: Number(zoomAxis.stepSelect.value) || 1,
+        focusStep: Number(focusAxis.stepSelect.value) || 1,
+      }));
+    });
+  }
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "live-tile-line live-tile-ptz";
+  toggle.textContent = "Zoom";
+  toggle.setAttribute("aria-label", "Toggle zoom panel");
+  toggle.setAttribute("aria-pressed", "false");
+  toggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const open = panel.hidden;
+    panel.hidden = !open;
+    toggle.setAttribute("aria-pressed", open ? "true" : "false");
+    toggle.classList.toggle("active", open);
+    if (open) syncPtzPanel(tile);
+  });
+
+  return { panel, toggle };
+}
+
 function makeLiveTile(cam) {
   const label = cameraName(cam);
   const tile = document.createElement("article");
   tile.className = "live-tile";
   tile.dataset.cam = cam.id;
   tile.dataset.label = label;
+  if (cam.ptz) tile.dataset.ptz = "1";
   tile.tabIndex = 0;
   tile.setAttribute("role", "button");
   tile.setAttribute("aria-label", `${label} live view`);
@@ -565,7 +757,13 @@ function makeLiveTile(cam) {
     removeLiveCamera(cam);
   });
   bar.append(name, muteBtn, lineBtn, clearBtn, removeBtn);
-  tile.append(stage, bar);
+  if (cam.ptz) {
+    const { panel, toggle } = makePtzPanel(cam, tile);
+    removeBtn.before(toggle);
+    tile.append(stage, bar, panel);
+  } else {
+    tile.append(stage, bar);
+  }
   stage.addEventListener("pointerdown", (event) => {
     if (lineDraw?.tile !== tile) return;
     event.preventDefault();
@@ -664,69 +862,105 @@ async function removeLiveCamera(cam) {
   }
 }
 
-function startClipFeed(rangeStart, rangeEnd, offsetMs = 0) {
+function clipCamId(explicit) {
+  return explicit || facesCam?.value || lastCamId || "";
+}
+
+function clipCamQuery(cam) {
+  const id = clipCamId(cam);
+  return id ? `&cam=${encodeURIComponent(id)}` : "";
+}
+
+function startClipFeed(rangeStart, rangeEnd, offsetMs = 0, cam) {
   const durationMs = Date.parse(rangeEnd) - Date.parse(rangeStart);
   const pos = Math.min(Math.max(0, offsetMs), Math.max(0, durationMs - 500));
   const playStart = cameraStamp(Date.parse(rangeStart) + pos);
   const remaining = Date.parse(rangeEnd) - Date.parse(playStart);
   const gen = ++clipGen;
+  const camId = clipCamId(cam);
   clearTimeout(endTimer);
   clearTimeout(clipAudioTimer);
+  stopTick();
   freezeFrame();
   stopAudio();
+  if (clipFirstFrameHandler) {
+    view.removeEventListener("load", clipFirstFrameHandler);
+    clipFirstFrameHandler = null;
+  }
   playback = {
     kind: "clip",
+    cam: camId,
     rangeStart,
     rangeEnd,
     durationMs,
     offsetMs: pos,
-    startedAt: performance.now(),
+    startedAt: null,
     paused: false,
   };
   seekEl.max = String(Math.floor(durationMs));
   setTransport("clip");
   setPausedUi(false);
   updateSeekUi();
-  const feedUrl = `/clip-stream?start=${encodeURIComponent(playStart)}&end=${encodeURIComponent(rangeEnd)}&_=${gen}`;
-  const audioUrl = `/clip-audio?start=${encodeURIComponent(playStart)}&end=${encodeURIComponent(rangeEnd)}`;
+  const camQ = clipCamQuery(camId);
+  const feedUrl = `/clip-stream?start=${encodeURIComponent(playStart)}&end=${encodeURIComponent(rangeEnd)}${camQ}&_=${gen}`;
+  const audioUrl = `/clip-audio?start=${encodeURIComponent(playStart)}&end=${encodeURIComponent(rangeEnd)}${camQ}`;
   rawLink.href = feedUrl;
   rawLink.textContent = "Open /clip-stream";
-  window.setTimeout(() => {
+
+  clipFirstFrameHandler = () => {
     if (gen !== clipGen) return;
-    playFeed(feedUrl, null);
-    clipAudioTimer = window.setTimeout(() => {
-      if (gen !== clipGen || playback?.paused) return;
-      startPcmAudio(audioUrl);
-    }, 900);
+    if (!String(view.src || "").includes("/clip-stream")) return;
+    if (!playback || playback.kind !== "clip" || playback.paused) return;
+    if (playback.startedAt != null) return;
+    playback.startedAt = performance.now();
+    startTick();
+    updateSeekUi();
+    clearTimeout(endTimer);
     endTimer = window.setTimeout(() => {
       if (gen !== clipGen) return;
       freezeFrame();
       stopAudio();
       stopTick();
+      if (clipFirstFrameHandler) {
+        view.removeEventListener("load", clipFirstFrameHandler);
+        clipFirstFrameHandler = null;
+      }
       if (playback) {
         playback.paused = true;
         playback.offsetMs = playback.durationMs;
+        playback.startedAt = null;
       }
       setPausedUi(true);
       updateSeekUi();
       if (onPlaybackEnded) onPlaybackEnded();
       else statusEl.textContent = "Clip finished";
-    }, remaining + 2000);
+    }, remaining + 500);
+  };
+
+  window.setTimeout(() => {
+    if (gen !== clipGen) return;
+    view.addEventListener("load", clipFirstFrameHandler);
+    playFeed(feedUrl, null);
+    clipAudioTimer = window.setTimeout(() => {
+      if (gen !== clipGen || playback?.paused) return;
+      startPcmAudio(audioUrl);
+    }, 900);
   }, 450);
 }
 
 function seekTo(offsetMs) {
   if (!playback || playback.kind !== "clip") return;
-  const { rangeStart, rangeEnd } = playback;
+  const { rangeStart, rangeEnd, cam } = playback;
   const pos = offsetMs;
   clearTimeout(clipSeekTimer);
-  clipSeekTimer = window.setTimeout(() => startClipFeed(rangeStart, rangeEnd, pos), 180);
+  clipSeekTimer = window.setTimeout(() => startClipFeed(rangeStart, rangeEnd, pos, cam), 180);
 }
 
 function pausePlayback() {
   if (!playback || playback.paused) return;
   if (playback.kind === "clip") playback.offsetMs = currentPos();
   playback.paused = true;
+  if (playback.kind === "clip") playback.startedAt = null;
   freezeFrame();
   stopAudio();
   clearTimeout(endTimer);
@@ -742,7 +976,7 @@ function resumePlayback() {
     return;
   }
   const pos = playback.offsetMs >= playback.durationMs ? 0 : playback.offsetMs;
-  startClipFeed(playback.rangeStart, playback.rangeEnd, pos);
+  startClipFeed(playback.rangeStart, playback.rangeEnd, pos, playback.cam);
 }
 
 function togglePlayback() {
@@ -931,9 +1165,11 @@ function clipRange() {
 function playClip({ push = true } = {}) {
   const range = clipRange();
   if (!range) return;
+  const cam = clipCamId();
+  const camQ = clipCamQuery(cam);
 
-  const pageUrl = `/clip?start=${encodeURIComponent(range.start)}&end=${encodeURIComponent(range.end)}`;
-  const feedUrl = `/clip-stream?start=${encodeURIComponent(range.start)}&end=${encodeURIComponent(range.end)}`;
+  const pageUrl = `/clip?start=${encodeURIComponent(range.start)}&end=${encodeURIComponent(range.end)}${cam ? `&cam=${encodeURIComponent(cam)}` : ""}`;
+  const feedUrl = `/clip-stream?start=${encodeURIComponent(range.start)}&end=${encodeURIComponent(range.end)}${camQ}`;
   if (push) history.pushState({}, "", pageUrl);
 
   setChrome({
@@ -944,14 +1180,15 @@ function playClip({ push = true } = {}) {
     rawText: "Open /clip-stream",
   });
   onPlaybackEnded = () => showLive({ push: true });
-  startClipFeed(range.start, range.end, 0);
+  startClipFeed(range.start, range.end, 0, cam);
 }
 
 async function saveClipToDisk() {
   const range = clipRange();
   if (!range) return;
   statusEl.textContent = "Saving clip… wait about as long as the clip lasts";
-  const url = `/save-clip?start=${encodeURIComponent(range.start)}&end=${encodeURIComponent(range.end)}`;
+  const camQ = clipCamQuery();
+  const url = `/save-clip?start=${encodeURIComponent(range.start)}&end=${encodeURIComponent(range.end)}${camQ}`;
   try {
     const res = await fetch(url);
     const data = await res.json();
@@ -1564,33 +1801,23 @@ async function showFaces({ push = true } = {}) {
   return loadFaces();
 }
 
-async function fetchFacesPage({ names = true, track = true, fresh = false } = {}) {
+async function fetchFacesPage({ names = true, track = true, page = facesPage } = {}) {
   const reqId = track ? ++facesFetchId : facesFetchId;
   syncFacesPageSize();
-  const start = facesPage * facesPageSize;
+  const start = page * facesPageSize;
   const end = start + facesPageSize;
-  const qs = `/api/faces?start=${start}&end=${end}&offset=${start}&limit=${facesPageSize}${names ? "&names=1" : ""}${fresh ? "&fresh=1" : ""}${camQuery(facesCam)}${facesDateQuery()}${facesFilterQuery()}`;
+  const qs = `/api/faces?start=${start}&end=${end}&offset=${start}&limit=${facesPageSize}${names ? "&names=1" : ""}${camQuery(facesCam)}${facesDateQuery()}${facesFilterQuery()}`;
   const res = await fetch(qs, { cache: "no-store" });
   const data = await res.json();
   const faces = Array.isArray(data) ? data : data.faces;
   const total = Array.isArray(data) ? data.length : Number(data.total) || 0;
-  return { reqId, res, data, faces, total };
-}
-
-function prefetchFacePage(page) {
-  if (page < 0 || (facesTotal && page >= facesPageCount())) return;
-  const start = page * facesPageSize;
-  const end = start + facesPageSize;
-  fetch(
-    `/api/faces?start=${start}&end=${end}&offset=${start}&limit=${facesPageSize}${camQuery(facesCam)}${facesDateQuery()}${facesFilterQuery()}`,
-    { cache: "no-store" },
-  ).catch(() => {});
+  return { reqId, res, data, faces, total, page };
 }
 
 async function loadFaces(page = facesPage) {
   stopFacesPoll();
   const from = facesPage;
-  facesPage = page;
+  const target = Math.max(0, page);
   const limit = syncFacesPageSize();
   if (!facesGrid.childElementCount) {
     facesEmpty.hidden = false;
@@ -1598,23 +1825,29 @@ async function loadFaces(page = facesPage) {
   } else {
     facesEmpty.hidden = true;
   }
-  updateFacesPager();
+  btnFacesPrev.disabled = true;
+  btnFacesNext.disabled = true;
   let poll = false;
   try {
-    let { reqId, res, data, faces, total } = await fetchFacesPage({ names: true });
+    let { reqId, res, data, faces, total } = await fetchFacesPage({ names: true, page: target });
     if (reqId !== facesFetchId) return;
     if (!res.ok || (Array.isArray(faces) && total > 0 && !faces.length)) {
-      const retry = await fetchFacesPage({ names: true, fresh: true });
+      const retry = await fetchFacesPage({ names: true, page: target });
       if (retry.reqId !== facesFetchId) return;
       ({ res, data, faces, total } = retry);
     }
     facesTotal = total;
-    if (facesTotal && facesPage >= facesPageCount()) {
-      facesPage = facesPageCount() - 1;
-      return loadFaces();
+    let shown = target;
+    if (facesTotal && shown >= facesPageCount()) {
+      shown = Math.max(0, facesPageCount() - 1);
+      if (shown !== target) {
+        const again = await fetchFacesPage({ names: true, page: shown });
+        if (again.reqId !== facesFetchId) return;
+        ({ res, data, faces, total } = again);
+        facesTotal = total;
+      }
     }
     if (!res.ok || !Array.isArray(faces) || (facesTotal > 0 && !faces.length)) {
-      facesPage = from;
       updateFacesPager();
       if (!facesGrid.childElementCount) {
         facesEmpty.hidden = false;
@@ -1623,6 +1856,7 @@ async function loadFaces(page = facesPage) {
       return;
     }
     if (facesTotal === 0) {
+      facesPage = 0;
       facesGrid.replaceChildren();
       facesEmpty.hidden = false;
       facesEmpty.textContent = "No snapshots yet";
@@ -1630,12 +1864,11 @@ async function loadFaces(page = facesPage) {
       poll = true;
       return;
     }
+    facesPage = shown;
     facesEmpty.hidden = true;
     renderFaceCards(faces);
     updateFacesPager();
-    prefetchFacePage(facesPage + 1);
-    prefetchFacePage(facesPage - 1);
-    if (syncFacesPageSize() !== limit) return loadFaces();
+    if (syncFacesPageSize() !== limit) return loadFaces(facesPage);
     poll = true;
   } catch (err) {
     facesPage = from;
@@ -1653,7 +1886,7 @@ async function refreshFaces() {
   if (facesDateValue() !== localDateValue()) return;
   let res, faces, total, reqId;
   try {
-    ({ reqId, res, faces, total } = await fetchFacesPage({ names: false, track: false, fresh: true }));
+    ({ reqId, res, faces, total } = await fetchFacesPage({ names: false, track: false, page: 0 }));
   } catch {
     stopFacesPoll();
     return;
@@ -1686,8 +1919,10 @@ function playFaceClip(start, end, { push = true, filename } = {}) {
     statusEl.textContent = "End must be after start";
     return;
   }
-  const pageUrl = `/faces?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
-  const feedUrl = `/clip-stream?start=${encodeURIComponent(range.start)}&end=${encodeURIComponent(range.end)}`;
+  const cam = clipCamId();
+  const camQ = clipCamQuery(cam);
+  const pageUrl = `/faces?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}${cam ? `&cam=${encodeURIComponent(cam)}` : ""}`;
+  const feedUrl = `/clip-stream?start=${encodeURIComponent(range.start)}&end=${encodeURIComponent(range.end)}${camQ}`;
   if (push) history.pushState({}, "", pageUrl);
   setChrome({
     page: "faces",
@@ -1703,7 +1938,7 @@ function playFaceClip(start, end, { push = true, filename } = {}) {
   onPlaybackEnded = () => {
     statusEl.textContent = "Clip finished";
   };
-  startClipFeed(range.start, range.end, 0);
+  startClipFeed(range.start, range.end, 0, cam);
   player.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -1712,7 +1947,10 @@ function applyUrl() {
   if (url.pathname === "/faces") {
     const start = url.searchParams.get("start");
     const end = url.searchParams.get("end");
+    const cam = url.searchParams.get("cam");
+    if (cam) lastCamId = cam;
     showFaces({ push: false }).then(() => {
+      if (cam && facesCam) facesCam.value = cam;
       if (start && end) {
         const card = [...facesGrid.querySelectorAll(".face-card")].find((el) => el.dataset.start === start);
         playFaceClip(start, end, { push: false, filename: card?.dataset.filename });
@@ -2058,7 +2296,7 @@ cameraForm.addEventListener("submit", async (event) => {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Could not add camera");
     cameraModal.close();
-    statusEl.textContent = `Added ${data.name}`;
+    statusEl.textContent = data.ptz ? `Added ${data.name} · PTZ available` : `Added ${data.name}`;
     await loadLiveDash({ goToLast: true });
   } catch (err) {
     statusEl.textContent = String(err.message || err);

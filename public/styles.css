@@ -565,6 +565,130 @@ main {
   border-radius: 10px;
 }
 
+.live-tile-ptz.active {
+  color: #111;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.ptz-panel {
+  display: none;
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  z-index: 4;
+  width: min(280px, calc(100% - 2rem));
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(18, 15, 12, 0.94);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  overflow: hidden;
+  backdrop-filter: blur(10px);
+}
+
+.ptz-panel:not([hidden]) {
+  display: block;
+}
+
+.ptz-panel-head {
+  padding: 0.65rem 0.9rem;
+  background: var(--accent-soft);
+  border-bottom: 1px solid var(--line);
+  color: var(--accent);
+  font-family: var(--sans);
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ptz-panel-body {
+  display: grid;
+  gap: 1rem;
+  padding: 0.95rem 0.9rem 1.05rem;
+}
+
+.ptz-axis-title {
+  margin-bottom: 0.45rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+.ptz-axis-row {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.ptz-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.ptz-step select {
+  min-height: 34px;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #1c1916;
+  color: var(--text);
+  font: inherit;
+}
+
+.ptz-slider-row {
+  display: grid;
+  grid-template-columns: 40px 1fr 40px;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.ptz-nudge {
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #1c1916;
+  color: var(--text);
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.ptz-nudge:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ptz-slider-row input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.ptz-actions {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.ptz-action {
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #1c1916;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.ptz-action:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .live-tile:fullscreen,
 .live-tile:-webkit-full-screen {
   width: 100%;
@@ -589,6 +713,11 @@ main {
 .live-tile:-webkit-full-screen .live-tile-mute {
   display: inline-flex;
   align-items: center;
+}
+
+.live-tile:fullscreen .ptz-panel,
+.live-tile:-webkit-full-screen .ptz-panel {
+  position: absolute;
 }
 
 .live-tile:fullscreen img,

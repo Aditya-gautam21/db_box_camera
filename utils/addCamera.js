@@ -17,6 +17,10 @@ export async function loadCameras() {
   }
 }
 
+async function saveCameras(cameras) {
+  await writeFile(cameraFile, `${JSON.stringify(cameras, null, 2)}\n`);
+}
+
 export async function getCamera(id) {
   const cameras = await loadCameras();
   if (id) {
@@ -28,7 +32,7 @@ export async function getCamera(id) {
   return cameras[0] ?? null;
 }
 
-export async function addCamera(name, host, username, password) {
+export async function addCamera(name, host, username, password, ptzInfo = {}) {
   const cameras = await loadCameras();
   const camera = {
     id: randomBytes(4).toString("hex"),
@@ -36,10 +40,27 @@ export async function addCamera(name, host, username, password) {
     host,
     username,
     password,
+    ptz: ptzInfo.ptz === true,
+    ptzChannel: ptzInfo.ptzChannel || "CH1",
+    zoomMin: ptzInfo.zoomMin ?? 0,
+    zoomMax: ptzInfo.zoomMax ?? 0,
+    focusMin: ptzInfo.focusMin ?? 0,
+    focusMax: ptzInfo.focusMax ?? 0,
+    zoomSteps: ptzInfo.zoomSteps ?? [1, 5, 20],
+    focusSteps: ptzInfo.focusSteps ?? [1, 5, 20],
   };
   cameras.push(camera);
-  await writeFile(cameraFile, `${JSON.stringify(cameras, null, 2)}\n`);
+  await saveCameras(cameras);
   return camera;
+}
+
+export async function updateCamera(id, fields = {}) {
+  const cameras = await loadCameras();
+  const idx = cameras.findIndex((cam) => cam.id === id);
+  if (idx < 0) throw new Error("unknown camera");
+  cameras[idx] = { ...cameras[idx], ...fields };
+  await saveCameras(cameras);
+  return cameras[idx];
 }
 
 export async function removeCamera(id) {
@@ -47,7 +68,7 @@ export async function removeCamera(id) {
   const cameras = await loadCameras();
   const next = cameras.filter((cam) => cam.id !== id);
   if (next.length === cameras.length) throw new Error("unknown camera");
-  await writeFile(cameraFile, `${JSON.stringify(next, null, 2)}\n`);
+  await saveCameras(next);
   return { id };
 }
 
@@ -58,5 +79,16 @@ export function getRtspUrl(cam, subtype = 0) {
 }
 
 export function publicCameras(cameras) {
-  return cameras.map(({ id, name }) => ({ id, name }));
+  return cameras.map((cam) => ({
+    id: cam.id,
+    name: cam.name,
+    ptz: cam.ptz === true,
+    ptzChannel: cam.ptzChannel || "CH1",
+    zoomMin: cam.zoomMin ?? 0,
+    zoomMax: cam.zoomMax ?? 0,
+    focusMin: cam.focusMin ?? 0,
+    focusMax: cam.focusMax ?? 0,
+    zoomSteps: cam.zoomSteps ?? [1, 5, 20],
+    focusSteps: cam.focusSteps ?? [1, 5, 20],
+  }));
 }

@@ -60,7 +60,7 @@ function liveVideoArgs(rtspUrl) {
     "-analyzeduration", "0",
     "-i", rtspUrl,
     "-an",
-    "-vf", "fps=12,scale=960:-2",
+    "-vf", "fps=12,scale=960:-2,format=yuv420p",
     "-f", "mpjpeg",
     "-q:v", "8",
     "pipe:1",
@@ -70,7 +70,7 @@ function liveVideoArgs(rtspUrl) {
 function clipVideoArgs(rtspUrl, duration) {
   const args = [
     "-hide_banner",
-    "-loglevel", "warning",
+    "-loglevel", "fatal",
     "-rtsp_transport", "tcp",
     "-timeout", "10000000",
     "-probesize", "5000000",
@@ -79,7 +79,7 @@ function clipVideoArgs(rtspUrl, duration) {
     "-i", rtspUrl,
     "-map", "0:v:0?",
     "-an",
-    "-vf", "fps=12,scale=960:-2",
+    "-vf", "fps=12,scale=960:-2,format=yuv420p",
     "-f", "mpjpeg",
     "-q:v", "5",
   ];

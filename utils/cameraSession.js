@@ -36,7 +36,9 @@ function isUnreachable(err) {
 function isDeadSession(err) {
   const code = err?.code;
   return code === 56 || code === "56" ||
-    err?.message === "no_login" || err instanceof SyntaxError;
+    err?.message === "no_login" ||
+    err?.message === "no_heartbeat" ||
+    err instanceof SyntaxError;
 }
 
 function authOf(cam) {
@@ -127,8 +129,8 @@ export function createSession(cam) {
         { maxBuffer: 32 * 1024 * 1024 },
       );
       const json = JSON.parse(stdout);
-      if (json.error_code === "no_login") {
-        throw new Error("no_login");
+      if (json.error_code === "no_login" || json.error_code === "no_heartbeat") {
+        throw new Error(json.error_code);
       }
       return json;
     } catch (err) {

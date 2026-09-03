@@ -2,15 +2,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
 import { stream, audioStream } from "./livestream.js";
-import { env } from "./cameraSession.js";
-
-function camAuth() {
-  return {
-    username: env("CAMERA_USERNAME"),
-    password: env("CAMERA_PASSWORD"),
-    hostname: env("CAMERA_HOSTNAME"),
-  };
-}
+import { getCamera } from "./addCamera.js";
 
 export function playbackUri({ username, password, hostname, start, end }) {
   const q = new URLSearchParams({
@@ -31,83 +23,43 @@ function durationSeconds(start, end) {
   return 10;
 }
 
-/* Use when we want to save a clip triggered by an event
-export function fetchFaceClip(evt, outDir) {
-  const t = new Date(evt.time);
-  const start = new Date(t.getTime() - 5_000);
-  const end = new Date(t.getTime() + 5_000);
-  fs.mkdirSync(outDir, { recursive: true });
-  const outFile = path.join(
-    outDir,
-    `face-${t.toISOString().replaceAll(":", "")}.mp4`
-  );
-  const uri = playbackUri({
-    ...camAuth(),
-    start,
-    end,
+function stamp(value) {
+  if (value instanceof Date) return value.toISOString().replace(/\.\d{3}Z$/, "Z");
+  return String(value);
+}
+
+async function playbackUrl(camId, start, end) {
+  const cam = await getCamera(camId);
+  if (!cam?.host) throw Object.assign(new Error("unknown camera"), { status: 404 });
+  return playbackUri({
+    username: cam.username,
+    password: cam.password,
+    hostname: cam.host,
+    start: stamp(start),
+    end: stamp(end),
   });
+}
 
-   return new Promise((resolve, reject) => {
-    setTimeout(() => {
-      const ff = spawn(
-        "ffmpeg",
-        [
-          "-y",
-          "-rtsp_transport", "tcp",
-          "-timeout", "3000000",
-          "-i", uri,
-          "-t", "8",
-          "-c:v", "copy",
-          "-c:a", "aac",
-          "-ac", "1",
-          "-ar", "8000",
-          "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
-          outFile,
-        ],
-        { stdio: ["ignore", "inherit", "inherit"] }
-      );
-
-      const watchdog = setTimeout(() => ff.kill("SIGKILL"), 20_000);
-
-      ff.on("exit", (code) => {
-        clearTimeout(watchdog);
-        if (code === 0) resolve(outFile);
-        else reject(new Error("ffmpeg " + code));
-      });
-    }, 6_000);
-  });
-} */ 
-
-export function clipStream(req, res, start, end) {
-  stream(req, res, playbackUrl(start, end), {
+export async function clipStream(req, res, { cam, start, end }) {
+  const url = await playbackUrl(cam, start, end);
+  stream(req, res, url, {
     duration: durationSeconds(start, end),
   });
 }
 
-export function clipAudio(req, res, start, end, sampleRate) {
-  audioStream(req, res, playbackUrl(start, end), {
+export async function clipAudio(req, res, { cam, start, end, sampleRate }) {
+  const url = await playbackUrl(cam, start, end);
+  audioStream(req, res, url, {
     duration: durationSeconds(start, end),
     sampleRate,
   });
 }
 
-function playbackUrl(start, end) {
-  return playbackUri({
-    ...camAuth(),
-    start,
-    end,
-  });
-}
-
-export function saveClip({ start, end, outDir }) {
+export async function saveClip({ cam, start, end, outDir }) {
   fs.mkdirSync(outDir, { recursive: true });
-  const stamp = String(start).replaceAll(":", "").replaceAll("T", "-");
-  const outFile = path.join(outDir, `clip-${stamp}.mp4`);
-  const clipUrl = playbackUri({
-    ...camAuth(),
-    start,
-    end,
-  });
+  const stampLabel = String(start).replaceAll(":", "").replaceAll("T", "-");
+  const outFile = path.join(outDir, `clip-${stampLabel}.mp4`);
+  const clipUrl = await playbackUrl(cam, start, end);
   const seconds = durationSeconds(start, end);
 
   return new Promise((resolve, reject) => {
@@ -126,12 +78,12 @@ export function saveClip({ start, end, outDir }) {
         "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
         outFile,
       ],
-      { stdio: ["ignore", "inherit", "inherit"] }
+      { stdio: ["ignore", "inherit", "inherit"] },
     );
 
     const watchdog = setTimeout(
       () => ff.kill("SIGKILL"),
-      (seconds + 15) * 1000
+      (seconds + 15) * 1000,
     );
 
     ff.on("exit", (code) => {
