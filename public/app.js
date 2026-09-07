@@ -270,6 +270,12 @@ function openLiveTile(tile) {
 function onLiveTileFullscreen() {
   const tile = focusedLiveTile();
   if (!tile) {
+    for (const el of liveDash.querySelectorAll(".live-tile")) {
+      el.classList.remove("settings-open");
+      el.querySelector(".live-tile-settings")?.classList.remove("active");
+      el.querySelector(".live-tile-settings")?.setAttribute("aria-pressed", "false");
+      el._closeEvents?.();
+    }
     if (document.body.dataset.page === "live") stopAudio();
     return;
   }
@@ -334,6 +340,34 @@ function facesFilterQuery() {
   }
   const q = params.toString();
   return q ? `&${q}` : "";
+}
+
+function facesFilterActive() {
+  const form = document.getElementById("faces-filter-form");
+  if (!form) return false;
+  return ["gender", "age", "glasses", "mask", "expression"].some(
+    (name) => form.querySelectorAll(`input[name="${name}"]:checked`).length > 0,
+  );
+}
+
+function facesFilterSummary() {
+  const form = document.getElementById("faces-filter-form");
+  if (!form) return "Please Select";
+  const labels = [];
+  for (const name of ["gender", "age", "glasses", "mask", "expression"]) {
+    const checked = [...form.querySelectorAll(`input[name="${name}"]:checked`)].map((el) => {
+      const text = el.closest("label")?.textContent?.trim();
+      return text || el.value;
+    });
+    if (checked.length) labels.push(...checked);
+  }
+  if (!labels.length) return "Please Select";
+  if (labels.length <= 2) return labels.join(", ");
+  return `${labels.slice(0, 2).join(", ")} +${labels.length - 2}`;
+}
+
+function syncFacesFilterButton() {
+  if (btnFacesFilter) btnFacesFilter.textContent = facesFilterSummary();
 }
 
 async function fillCamSelect(select, selectedId) {
@@ -559,6 +593,1868 @@ function makePtzPanel(cam, tile) {
   return { panel, toggle };
 }
 
+const EVENT_LABELS = {
+  FaceDetection: "Face Detection",
+  HumanVehicle: "Pedestrian and Vehicle",
+  LicensePlate: "License Plate",
+  LineCrossing: "Line Crossing",
+  Intrusion: "Intrusion",
+  EnterRegion: "Enter Region",
+  ExitRegion: "Exit Region",
+  ObjectDetection: "Object Detection",
+  CrossCounting: "Cross Counting",
+  HeatMap: "Heat Map",
+  QueueLength: "Queue Length",
+  CrowdDensity: "Crowd Density",
+  RareSound: "Rare Sound",
+  MotionDetection: "Motion Detection",
+  VideoTampering: "Video Tampering",
+};
+
+const EVENT_PARAM_LABELS = {
+  time_threshold: "Loitering Duration",
+  target_validity: "Target Validity",
+  min_pixel: "Min Pixels",
+  max_pixel: "Max Pixels",
+  sensitivity: "Sensitivity",
+  detection_type: "Detection Target",
+  detection_mode: "Detection Mode",
+  detection_range: "Detection Area",
+  snap_mode: "Capture Mode",
+  snap_num: "Snapshot Qty",
+  snap_frequency: "Capture Interval",
+  face_angle: "Face Angle",
+  face_attribute: "Face Attributes",
+  face_enhance: "Face Enhance",
+  lpd_enhance: "LPD Enhance",
+  plate_draw_rule: "License Plate Detect Rule",
+  mix_rule: "Mix Rule",
+  picture_quality: "Picture Quality",
+  roll_range: "Roll Angle",
+  pitch_range: "Pitch Angle",
+  yaw_range: "Yaw Angle",
+  day_level: "Day Level",
+  night_level: "Night Level",
+  alarm_num: "Alarm Number",
+  reset_count: "Reset Count",
+  auto_reset_switch: "Auto Reset",
+  auto_reset_time: "Reset Time",
+  max_detection_num: "Max Detection",
+  max_pro_time: "Max Staying Time",
+  smart_motion_detection: "Smart Motion",
+  target_type: "Detection Target",
+  rule_type: "Direction",
+  trigger_mode: "Trigger Mode",
+};
+
+const EVENT_VALUE_LABELS = {
+  OptimalMode: "Optimal Mode",
+  RealTimeMode: "Realtime Mode",
+  IntervalMode: "Interval Mode",
+  Default: "Default",
+  FrontalView: "Frontal View",
+  Multiangle: "Multi-angle",
+  UserDefined: "User-defined",
+  HybridMode: "Always",
+  MotionMode: "Moving Only",
+  StaticMode: "Static Mode",
+  EU_Plate: "European license plate",
+  US_Plate: "American license plate",
+  normal: "Normal Detect",
+  counting: "Counting Detect",
+  FullScreen: "Full Screen",
+  Customize: "User-defined",
+  Area: "Polygon",
+  Line: "Line",
+  Unlimited: "Unlimited",
+  "A->B": "A → B",
+  "B->A": "B → A",
+  "A<-->B": "A ↔ B",
+  Legacy: "Legacy",
+  Lost: "Lost",
+  "Lost & Legacy": "Lost & Legacy",
+  Pedestrian: "Pedestrian",
+  "Motor Vehicle": "Motor Vehicle",
+  "Non-motorized Vehicle": "Non-motorized Vehicle",
+  Vehicle: "Vehicle",
+  Motion: "Motion",
+  12: "12-hour",
+  24: "24-hour",
+  "Baby Crying Sound": "Baby Crying Sound",
+  "Dog Barking": "Dog Barking",
+  Gunshot: "Gunshot",
+};
+
+const EVENT_FIELD_ORDER = [
+  "snap_mode",
+  "face_angle",
+  "plate_draw_rule",
+  "detection_type",
+  "target_type",
+  "detection_mode",
+  "detection_range",
+  "min_pixel",
+  "max_pixel",
+  "sensitivity",
+  "time_threshold",
+  "target_validity",
+  "face_enhance",
+  "face_attribute",
+  "lpd_enhance",
+  "mix_rule",
+  "snap_num",
+  "snap_frequency",
+  "roll_range",
+  "pitch_range",
+  "yaw_range",
+  "picture_quality",
+  "day_level",
+  "night_level",
+  "alarm_num",
+  "reset_count",
+  "auto_reset_switch",
+  "auto_reset_time",
+  "max_detection_num",
+  "max_pro_time",
+  "smart_motion_detection",
+  "rule_type",
+  "trigger_mode",
+];
+
+const EVENT_SKIP_FIELDS = new Set([
+  "switch",
+  "rule_info",
+  "draw_add_btn",
+  "drawline_ABRegion_rule",
+  "mutual_exclusion",
+  "btn_get_default_data",
+  "rule_draw_number",
+  "dragline_rectFlip",
+  "region_setting",
+  "mbrow",
+  "mbcol",
+  "target_type_lg",
+  "alarm_out",
+  "rule_switch",
+  "start_time",
+  "end_time",
+]);
+
+function eventLabel(name) {
+  return EVENT_LABELS[name] || String(name).replace(/([a-z])([A-Z])/g, "$1 $2");
+}
+
+function eventParamLabel(name) {
+  return EVENT_PARAM_LABELS[name] || String(name).replaceAll("_", " ");
+}
+
+function eventValueLabel(value) {
+  const key = String(value);
+  return EVENT_VALUE_LABELS[key] || key;
+}
+
+function ruleKeys(config) {
+  return Object.keys(config?.rule_info || {}).sort((a, b) => {
+    return Number(a.replace(/\D/g, "")) - Number(b.replace(/\D/g, ""));
+  });
+}
+
+function emptyWorldPoint(pt) {
+  return !pt || (Number(pt[0]) === 0 && Number(pt[1]) === 0);
+}
+
+function rectPoints(rect) {
+  if (!rect) return [];
+  const pts = [];
+  for (let i = 1; i <= 8; i += 1) {
+    const x = Number(rect[`x${i}`]);
+    const y = Number(rect[`y${i}`]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) break;
+    if (pts.length && pts[pts.length - 1][0] === x && pts[pts.length - 1][1] === y) break;
+    pts.push([x, y]);
+  }
+  if (pts.length < 2 || pts.every(emptyWorldPoint)) return [];
+  return pts;
+}
+
+function linePoints(line) {
+  if (!line) return [];
+  const pts = [
+    [Number(line.x1), Number(line.y1)],
+    [Number(line.x2), Number(line.y2)],
+  ];
+  if (pts.some((pt) => !Number.isFinite(pt[0]) || !Number.isFinite(pt[1]))) return [];
+  if (pts.every(emptyWorldPoint)) return [];
+  return pts;
+}
+
+function ruleShape(rule) {
+  if (!rule) return { kind: "polygon", points: [] };
+  const line = linePoints(rule.rule_line);
+  if (line.length) return { kind: "line", points: line, type: rule.rule_type };
+  return { kind: "polygon", points: rectPoints(rule.rule_rect) };
+}
+
+function pointsToRect(points) {
+  const last = points[points.length - 1] || [0, 0];
+  const rect = {};
+  for (let i = 1; i <= 8; i += 1) {
+    const pt = points[i - 1] || last;
+    rect[`x${i}`] = Math.round(pt[0]);
+    rect[`y${i}`] = Math.round(pt[1]);
+  }
+  return rect;
+}
+
+function pointsToLine(points) {
+  const a = points[0] || [0, 0];
+  const b = points[1] || a;
+  return {
+    x1: Math.round(a[0]),
+    y1: Math.round(a[1]),
+    x2: Math.round(b[0]),
+    y2: Math.round(b[1]),
+  };
+}
+
+function clamp(n, min, max) {
+  return Math.min(max, Math.max(min, n));
+}
+
+function overlayMetrics(img, canvas, world) {
+  const cr = canvas.getBoundingClientRect();
+  const ir = img.getBoundingClientRect();
+  const nw = img.naturalWidth || 16;
+  const nh = img.naturalHeight || 9;
+  const scale = Math.min(ir.width / nw, ir.height / nh);
+  const dw = nw * scale;
+  const dh = nh * scale;
+  const left = ir.left - cr.left + (ir.width - dw) / 2;
+  const top = ir.top - cr.top + (ir.height - dh) / 2;
+  return {
+    left,
+    top,
+    width: dw,
+    height: dh,
+    toWorld(clientX, clientY) {
+      const x = ((clientX - cr.left - left) / dw) * world.width;
+      const y = ((clientY - cr.top - top) / dh) * world.height;
+      return [clamp(x, 0, world.width), clamp(y, 0, world.height)];
+    },
+    toScreen(x, y) {
+      return [left + (x / world.width) * dw, top + (y / world.height) * dh];
+    },
+  };
+}
+
+function hitPoint(points, x, y, r = 10) {
+  for (let i = 0; i < points.length; i += 1) {
+    const dx = points[i][0] - x;
+    const dy = points[i][1] - y;
+    if (dx * dx + dy * dy <= r * r) return i;
+  }
+  return -1;
+}
+
+async function eventApi(camId, path, body) {
+  const res = await fetch(`/api/cameras/${encodeURIComponent(camId)}/events${path}`, {
+    method: body ? "POST" : "GET",
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+async function camSettingApi(camId, path, body) {
+  const res = await fetch(`/api/cameras/${encodeURIComponent(camId)}${path}`, {
+    method: body ? "POST" : "GET",
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+const SETTING_NAV = [
+  { group: "Channel", pages: [{ id: "osd", label: "Live" }, { id: "cover", label: "Video Cover" }] },
+  { group: "Storage", pages: [{ id: "disk", label: "Disk" }] },
+  { group: "Network", pages: [{ id: "network", label: "General" }] },
+  { group: "Event", pages: [{ id: "events", label: "Event Settings" }] },
+];
+
+function coverRectPoints(rect) {
+  const left = Number(rect?.left) || 0;
+  const top = Number(rect?.top) || 0;
+  const width = Number(rect?.width) || 0;
+  const height = Number(rect?.height) || 0;
+  if (width <= 0 || height <= 0) return [];
+  return [
+    [left, top],
+    [left + width, top],
+    [left + width, top + height],
+    [left, top + height],
+  ];
+}
+
+function pointsToCoverRect(points) {
+  const xs = points.map((pt) => pt[0]);
+  const ys = points.map((pt) => pt[1]);
+  const left = Math.round(Math.min(...xs));
+  const top = Math.round(Math.min(...ys));
+  return {
+    left,
+    top,
+    width: Math.max(1, Math.round(Math.max(...xs) - left)),
+    height: Math.max(1, Math.round(Math.max(...ys) - top)),
+  };
+}
+
+function formatDiskMb(mb) {
+  const n = Number(mb) || 0;
+  if (n >= 1024) return `${(n / 1024).toFixed(2)} GB`;
+  return `${n} MB`;
+}
+
+function formatDiskTime(sec) {
+  const s = Math.max(0, Number(sec) || 0);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d) return `${d}d ${h}h`;
+  if (h) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function diskValueLabel(value) {
+  return ({
+    Sd: "SD Card",
+    Usb: "USB",
+    Esata: "eSATA",
+    Network: "NAS",
+    ReadAndWriteDisk: "Read/Write",
+    NoHdd: "No disk",
+    Unformat: "Unformatted",
+    HddError: "Error",
+    Auto: "Overwrite",
+    Off: "Stop when full",
+  }[value] || eventValueLabel(value));
+}
+
+function initEventStudio(tile, cam, ui) {
+  const state = {
+    loaded: false,
+    page: "events",
+    groups: [],
+    abilities: {},
+    ability: "Intrusion",
+    config: null,
+    range: {},
+    osd: null,
+    osdRange: {},
+    cover: null,
+    coverRev: 0,
+    disk: null,
+    network: null,
+    canvas: { width: 704, height: 576 },
+    selectedRule: 0,
+    selectedZone: 0,
+    drawMode: false,
+    draft: [],
+    drag: null,
+    saveTimer: 0,
+  };
+  tile._eventState = state;
+
+  function setStatus(text) {
+    if (focusedLiveTile() === tile) statusEl.textContent = text;
+  }
+
+  function currentRule() {
+    const key = ruleKeys(state.config)[state.selectedRule];
+    return key ? state.config.rule_info[key] : null;
+  }
+
+  function ruleKind(rule = currentRule() || state.config?.rule_info?.[ruleKeys(state.config)[0]]) {
+    if (!rule) return "polygon";
+    if (rule.trigger_mode === "Line") return "line";
+    if (rule.trigger_mode === "Area") return "polygon";
+    if (rule.rule_line && !rule.rule_rect) return "line";
+    return "polygon";
+  }
+
+  function detectionRange() {
+    const rule = currentRule() || state.config?.rule_info?.[ruleKeys(state.config)[0]];
+    return rule?.detection_range || "";
+  }
+
+  function setDetectionRange(value) {
+    for (const key of ruleKeys(state.config)) {
+      const rule = state.config.rule_info[key];
+      if ("detection_range" in rule || ruleItemSpec().detection_range) {
+        rule.detection_range = value;
+      }
+    }
+  }
+
+  function canDraw() {
+    if (!state.config?.rule_info || !ruleKeys(state.config).length) return false;
+    const range = detectionRange();
+    return !range || range === "UserDefined";
+  }
+
+  function ruleItemSpec() {
+    return state.range?.rule_info?.items?.rule_number1?.items || {};
+  }
+
+  function drawOverlay() {
+    const { canvas, img } = ui;
+    const ctx = canvas.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    if (!w || !h) return;
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    if (state.page === "osd") {
+      drawOsdOverlay(ctx, img, canvas);
+      return;
+    }
+    if (state.page === "cover") {
+      drawCoverOverlay(ctx, img, canvas);
+      return;
+    }
+    if (state.page !== "events" || !state.config || !canDraw()) return;
+    const m = overlayMetrics(img, canvas, state.canvas);
+    const keys = ruleKeys(state.config);
+    keys.forEach((key, index) => {
+      const rule = state.config.rule_info[key];
+      const shape = index === state.selectedRule && state.drawMode
+        ? { kind: ruleKind(), points: state.draft }
+        : ruleShape(rule);
+      if (!rule.rule_switch && !(index === state.selectedRule && state.drawMode)) return;
+      if (!shape.points.length) return;
+      const screen = shape.points.map(([x, y]) => m.toScreen(x, y));
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = index === state.selectedRule ? "#e3a45a" : "#f5d24a";
+      ctx.fillStyle = "rgba(227, 164, 90, 0.12)";
+      ctx.beginPath();
+      ctx.moveTo(screen[0][0], screen[0][1]);
+      for (const [x, y] of screen.slice(1)) ctx.lineTo(x, y);
+      if (shape.kind === "polygon" && screen.length > 2) ctx.closePath();
+      ctx.stroke();
+      if (shape.kind === "polygon" && screen.length > 2) ctx.fill();
+      screen.forEach(([x, y], i) => {
+        ctx.fillStyle = i === 0 ? "#ef4444" : "#fff";
+        ctx.beginPath();
+        ctx.arc(x, y, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#111";
+        ctx.stroke();
+      });
+      const labelAt = screen[0];
+      ctx.fillStyle = "#ef4444";
+      ctx.fillRect(labelAt[0] - 8, labelAt[1] - 22, 16, 16);
+      ctx.fillStyle = "#fff";
+      ctx.font = "11px Outfit, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(String(index + 1), labelAt[0], labelAt[1] - 11);
+    });
+  }
+
+  function drawOsdOverlay(ctx, img, canvas) {
+    if (!state.osd) return;
+    const m = overlayMetrics(img, canvas, state.canvas);
+    const items = [
+      { key: "name", label: state.osd.name?.text || "Camera" },
+      { key: "datetime", label: "Time" },
+      { key: "alarm", label: state.osd.alarm?.text || "Alarm" },
+    ];
+    ctx.font = "12px Outfit, sans-serif";
+    for (const item of items) {
+      if (!state.osd[item.key]?.show) continue;
+      const [x, y] = m.toScreen(state.osd[item.key].pos?.x || 0, state.osd[item.key].pos?.y || 0);
+      const width = Math.max(72, ctx.measureText(item.label).width + 16);
+      ctx.fillStyle = "rgba(8, 8, 8, 0.7)";
+      ctx.fillRect(x, y, width, 22);
+      ctx.strokeStyle = state.drag?.key === item.key ? "#e3a45a" : "#e8e4dc";
+      ctx.strokeRect(x, y, width, 22);
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "left";
+      ctx.fillText(item.label, x + 8, y + 15);
+    }
+  }
+
+  function drawCoverOverlay(ctx, img, canvas) {
+    if (!state.cover) return;
+    const m = overlayMetrics(img, canvas, state.canvas);
+    const zones = state.cover.zone_info || [];
+    zones.forEach((zone, index) => {
+      if (!zone.zone_enable) return;
+      if (index === state.selectedZone && state.drawMode) return;
+      const points = coverRectPoints(zone.rect);
+      if (points.length < 2) return;
+      const screen = points.map(([x, y]) => m.toScreen(x, y));
+      ctx.fillStyle = "rgba(12, 12, 12, 0.72)";
+      ctx.strokeStyle = index === state.selectedZone ? "#e3a45a" : "#8a8680";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(screen[0][0], screen[0][1]);
+      for (const [x, y] of screen.slice(1)) ctx.lineTo(x, y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      screen.forEach(([x, y]) => {
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      ctx.fillStyle = "#fff";
+      ctx.font = "11px Outfit, sans-serif";
+      ctx.fillText(String(index + 1), screen[0][0] + 6, screen[0][1] + 14);
+    });
+    if (state.drawMode && state.draft.length === 2) {
+      const a = m.toScreen(state.draft[0][0], state.draft[0][1]);
+      const b = m.toScreen(state.draft[1][0], state.draft[1][1]);
+      const x = Math.min(a[0], b[0]);
+      const y = Math.min(a[1], b[1]);
+      const w = Math.abs(b[0] - a[0]);
+      const h = Math.abs(b[1] - a[1]);
+      ctx.fillStyle = "rgba(12, 12, 12, 0.55)";
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = "#e3a45a";
+      ctx.strokeRect(x, y, w, h);
+    }
+  }
+
+  function renderTypes() {
+    ui.types.replaceChildren();
+    for (const group of SETTING_NAV) {
+      const title = document.createElement("p");
+      title.className = "event-group-title";
+      title.textContent = group.group;
+      ui.types.append(title);
+      for (const page of group.pages) {
+        const card = document.createElement("div");
+        card.className = "event-card";
+        if (page.id === state.page) card.classList.add("active");
+        const head = document.createElement("div");
+        head.className = "event-card-head";
+        head.append(Object.assign(document.createElement("span"), { textContent: page.label }));
+        card.append(head);
+        card.addEventListener("click", () => selectPage(page.id));
+        ui.types.append(card);
+      }
+    }
+    if (state.page !== "events") return;
+    for (const group of state.groups) {
+      const title = document.createElement("p");
+      title.className = "event-group-title event-sub-title";
+      title.textContent = group.title;
+      ui.types.append(title);
+      for (const item of group.abilities) {
+        const card = document.createElement("div");
+        card.className = "event-card event-sub-card";
+        card.dataset.ability = item.ability;
+        if (item.ability === state.ability) card.classList.add("active");
+        if (item.state === "On") card.classList.add("on");
+        const head = document.createElement("div");
+        head.className = "event-card-head";
+        const name = document.createElement("span");
+        name.textContent = eventLabel(item.ability);
+        const sw = document.createElement("input");
+        sw.type = "checkbox";
+        sw.className = "event-switch";
+        sw.checked = item.state === "On";
+        sw.addEventListener("click", (event) => event.stopPropagation());
+        sw.addEventListener("change", () => {
+          const on = sw.checked;
+          sw.checked = item.state === "On";
+          toggleAbility(item.ability, on);
+        });
+        head.append(name, sw);
+        card.append(head);
+        card.addEventListener("click", (event) => {
+          if (event.target.closest("input")) return;
+          selectAbility(item.ability);
+        });
+        ui.types.append(card);
+      }
+    }
+  }
+
+  function appendSlider(field, spec, getter, setter) {
+    const wrap = document.createElement("label");
+    wrap.className = "event-field";
+    wrap.append(eventParamLabel(field));
+    const row = document.createElement("div");
+    row.className = "event-slider-row";
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.min = String(spec.min);
+    slider.max = String(spec.max);
+    slider.value = String(getter() ?? spec.min);
+    const num = document.createElement("input");
+    num.type = "number";
+    num.min = slider.min;
+    num.max = slider.max;
+    num.value = slider.value;
+    const sync = (value) => {
+      const n = clamp(Number(value), spec.min, spec.max);
+      slider.value = String(n);
+      num.value = String(n);
+      setter(n);
+      queueSave();
+    };
+    slider.addEventListener("input", () => sync(slider.value));
+    num.addEventListener("change", () => sync(num.value));
+    row.append(slider, num);
+    wrap.append(row);
+    return wrap;
+  }
+
+  function appendSelect(field, items, getter, setter, numeric = false) {
+    const wrap = document.createElement("label");
+    wrap.className = "event-field";
+    wrap.append(eventParamLabel(field));
+    const select = document.createElement("select");
+    const current = getter();
+    for (const item of items) {
+      const opt = document.createElement("option");
+      opt.value = String(item);
+      opt.textContent = eventValueLabel(item);
+      if (String(current) === String(item)) opt.selected = true;
+      select.append(opt);
+    }
+    select.addEventListener("change", () => {
+      setter(numeric ? Number(select.value) : select.value);
+      queueSave();
+      if (field === "detection_range" || field === "trigger_mode") renderParams();
+    });
+    wrap.append(select);
+    return wrap;
+  }
+
+  function appendRadios(field, items, getter, setter) {
+    const wrap = document.createElement("div");
+    wrap.className = "event-field";
+    wrap.append(eventParamLabel(field));
+    const list = document.createElement("div");
+    list.className = "event-radios";
+    const current = String(getter() ?? "");
+    for (const item of items) {
+      const lab = document.createElement("label");
+      lab.className = "event-check";
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = `event-${field}`;
+      radio.value = String(item);
+      radio.checked = current === String(item);
+      radio.addEventListener("change", () => {
+        if (radio.checked) {
+          setter(item);
+          queueSave();
+        }
+      });
+      lab.append(radio, document.createTextNode(` ${eventValueLabel(item)}`));
+      list.append(lab);
+    }
+    wrap.append(list);
+    return wrap;
+  }
+
+  function appendChecks(field, items, getter, setter) {
+    const wrap = document.createElement("div");
+    wrap.className = "event-field";
+    wrap.append(eventParamLabel(field));
+    const list = document.createElement("div");
+    list.className = "event-checks";
+    const selected = new Set(getter() || []);
+    for (const item of items) {
+      const lab = document.createElement("label");
+      lab.className = "event-check";
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = selected.has(item);
+      box.addEventListener("change", () => {
+        const next = new Set(getter() || []);
+        if (box.checked) next.add(item);
+        else next.delete(item);
+        setter([...next]);
+        queueSave();
+      });
+      lab.append(box, document.createTextNode(` ${eventValueLabel(item)}`));
+      list.append(lab);
+    }
+    wrap.append(list);
+    return wrap;
+  }
+
+  function appendToggle(field, getter, setter) {
+    const wrap = document.createElement("label");
+    wrap.className = "event-field event-field-toggle";
+    wrap.append(eventParamLabel(field));
+    const sw = document.createElement("input");
+    sw.type = "checkbox";
+    sw.className = "event-switch";
+    sw.checked = Boolean(getter());
+    sw.addEventListener("change", () => {
+      setter(sw.checked);
+      queueSave();
+    });
+    wrap.append(sw);
+    return wrap;
+  }
+
+  function appendField(field, spec, getter, setter) {
+    if (!spec || typeof spec !== "object") return null;
+    if (spec.type === "bool") return appendToggle(field, getter, setter);
+    if (spec.type === "int32" && spec.min != null && spec.max != null) {
+      return appendSlider(field, spec, getter, setter);
+    }
+    if (spec.type === "int32" && Array.isArray(spec.items)) {
+      return appendSelect(field, spec.items, getter, setter, true);
+    }
+    if (spec.type === "string" && Array.isArray(spec.items) && spec.items.length === 2 && field === "plate_draw_rule") {
+      return appendRadios(field, spec.items, getter, setter);
+    }
+    if (spec.type === "string" && Array.isArray(spec.items)) {
+      return appendSelect(field, spec.items, getter, setter);
+    }
+    if (spec.type === "string") {
+      const wrap = document.createElement("label");
+      wrap.className = "event-field";
+      wrap.append(eventParamLabel(field));
+      const input = document.createElement("input");
+      input.type = "text";
+      input.value = String(getter() ?? "");
+      input.addEventListener("change", () => {
+        setter(input.value);
+        queueSave();
+      });
+      wrap.append(input);
+      return wrap;
+    }
+    if (spec.type === "array" && spec.items?.items) {
+      return appendChecks(field, spec.items.items, getter, setter);
+    }
+    return null;
+  }
+
+  function orderedFields(range) {
+    const keys = Object.keys(range || {}).filter((key) => !EVENT_SKIP_FIELDS.has(key) && range[key] && typeof range[key] === "object");
+    const seen = new Set();
+    const out = [];
+    for (const key of EVENT_FIELD_ORDER) {
+      if (keys.includes(key)) {
+        out.push(key);
+        seen.add(key);
+      }
+    }
+    for (const key of keys) {
+      if (!seen.has(key) && state.config[key] !== undefined) out.push(key);
+    }
+    return out;
+  }
+
+  function renderParams() {
+    if (state.page === "osd") {
+      renderOsdParams();
+      return;
+    }
+    if (state.page === "cover") {
+      renderCoverParams();
+      return;
+    }
+    if (state.page === "disk") {
+      renderDiskParams();
+      return;
+    }
+    if (state.page === "network") {
+      renderNetworkParams();
+      return;
+    }
+    ui.params.replaceChildren();
+    if (!state.config) {
+      ui.params.append(Object.assign(document.createElement("p"), {
+        className: "muted",
+        textContent: "Select an event",
+      }));
+      return;
+    }
+    const tabs = document.createElement("div");
+    tabs.className = "event-tabs";
+    const tab = document.createElement("span");
+    tab.className = "active";
+    tab.textContent = "Settings";
+    tabs.append(tab);
+    ui.params.append(tabs);
+    const fields = document.createElement("div");
+    fields.className = "event-fields";
+    for (const field of orderedFields(state.range)) {
+      const spec = state.range[field];
+      if (state.config[field] === undefined) continue;
+      const el = appendField(
+        field,
+        spec,
+        () => state.config[field],
+        (value) => { state.config[field] = value; },
+      );
+      if (el) fields.append(el);
+    }
+    const ruleSpec = ruleItemSpec();
+    if (ruleSpec.detection_range) {
+      fields.append(appendField(
+        "detection_range",
+        ruleSpec.detection_range,
+        () => detectionRange() || "FullScreen",
+        (value) => setDetectionRange(value),
+      ));
+    }
+    const rule = currentRule();
+    if (rule && ruleSpec.rule_type && rule.rule_type != null) {
+      fields.append(appendField(
+        "rule_type",
+        ruleSpec.rule_type,
+        () => rule.rule_type,
+        (value) => { rule.rule_type = value; },
+      ));
+    }
+    if (rule && ruleSpec.trigger_mode && rule.trigger_mode != null) {
+      fields.append(appendField(
+        "trigger_mode",
+        ruleSpec.trigger_mode,
+        () => rule.trigger_mode,
+        (value) => { rule.trigger_mode = value; },
+      ));
+    }
+    ui.params.append(fields);
+    renderTools();
+  }
+
+  function renderTools() {
+    ui.tools.replaceChildren();
+    if (state.page === "cover") {
+      renderCoverTools();
+      return;
+    }
+    if (state.page !== "events" || !canDraw()) return;
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "event-draw-btn add";
+    add.textContent = "Add";
+    const draw = document.createElement("button");
+    draw.type = "button";
+    draw.className = "event-draw-btn";
+    draw.textContent = state.drawMode ? "Finish" : "Draw";
+    draw.classList.toggle("active", state.drawMode);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "event-draw-btn";
+    remove.textContent = "Remove";
+    const removeAll = document.createElement("button");
+    removeAll.type = "button";
+    removeAll.className = "event-draw-btn danger";
+    removeAll.textContent = "Remove All";
+    add.addEventListener("click", (event) => {
+      event.stopPropagation();
+      addRule();
+    });
+    draw.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleDraw();
+    });
+    remove.addEventListener("click", (event) => {
+      event.stopPropagation();
+      removeRule(state.selectedRule);
+    });
+    removeAll.addEventListener("click", (event) => {
+      event.stopPropagation();
+      removeRule(-1);
+    });
+    ui.tools.append(add, draw, remove, removeAll);
+  }
+
+  function queueSave() {
+    clearTimeout(state.saveTimer);
+    state.saveTimer = setTimeout(() => savePage(), 400);
+    drawOverlay();
+  }
+
+  async function savePage() {
+    if (state.page === "osd") return saveOsd();
+    if (state.page === "cover") return saveCover();
+    if (state.page === "disk") return saveDisk();
+    if (state.page === "network") return saveNetwork();
+    return saveConfig();
+  }
+
+  async function saveConfig() {
+    if (!state.config) return;
+    try {
+      const saved = await eventApi(cam.id, `/${encodeURIComponent(state.ability)}`, {
+        channel: "CH1",
+        config: state.config,
+      });
+      state.config = saved.config;
+      state.range = saved.range;
+      state.canvas = saved.canvas;
+      drawOverlay();
+    } catch (err) {
+      setStatus(err.message);
+    }
+  }
+
+  function osdFieldLabel(field) {
+    return ({
+      "name.show": "Channel Name",
+      "datetime.show": "Time",
+      "datetime.date_format": "Date Format",
+      "datetime.time_format": "Time Format",
+      "alarm.show": "Alarm",
+      refresh_rate: "Refresh Rate",
+      privacy_protection: "Privacy Protection",
+      water_mark: "Watermark",
+    }[field] || eventParamLabel(field));
+  }
+
+  function renderOsdParams() {
+    ui.params.replaceChildren();
+    const tabs = document.createElement("div");
+    tabs.className = "event-tabs";
+    tabs.append(Object.assign(document.createElement("span"), { className: "active", textContent: "Live" }));
+    ui.params.append(tabs);
+    if (!state.osd) {
+      ui.params.append(Object.assign(document.createElement("p"), { className: "muted", textContent: "Loading…" }));
+      renderTools();
+      return;
+    }
+    const fields = document.createElement("div");
+    fields.className = "event-fields";
+    const rows = [
+      ["name.show", { type: "bool" }, () => Boolean(state.osd.name?.show), (value) => { state.osd.name.show = value; }],
+      ["datetime.show", { type: "bool" }, () => Boolean(state.osd.datetime?.show), (value) => { state.osd.datetime.show = value; }],
+      ["datetime.date_format", state.osdRange.datetime?.items?.date_format, () => state.osd.datetime?.date_format, (value) => { state.osd.datetime.date_format = value; }],
+      ["datetime.time_format", state.osdRange.datetime?.items?.time_format, () => state.osd.datetime?.time_format, (value) => { state.osd.datetime.time_format = Number(value); }],
+      ["alarm.show", { type: "bool" }, () => Boolean(state.osd.alarm?.show), (value) => { state.osd.alarm.show = value; }],
+      ["refresh_rate", state.osdRange.refresh_rate, () => state.osd.refresh_rate, (value) => { state.osd.refresh_rate = value; }],
+      ["privacy_protection", { type: "bool" }, () => Boolean(state.osd.privacy_protection), (value) => { state.osd.privacy_protection = value; }],
+      ["water_mark", { type: "bool" }, () => Boolean(state.osd.water_mark), (value) => { state.osd.water_mark = value; }],
+    ];
+    for (const [field, spec, getter, setter] of rows) {
+      if (!spec) continue;
+      const el = appendField(field, spec, getter, setter);
+      if (!el) continue;
+      if (el.childNodes[0]) el.childNodes[0].textContent = osdFieldLabel(field);
+      fields.append(el);
+    }
+    ui.params.append(fields);
+    renderTools();
+  }
+
+  async function saveOsd() {
+    if (!state.osd) return;
+    try {
+      const saved = await camSettingApi(cam.id, "/osd", { channel: "CH1", config: state.osd });
+      state.osd = saved.config;
+      state.osdRange = saved.range || state.osdRange;
+      state.canvas = saved.canvas || state.canvas;
+      drawOverlay();
+    } catch (err) {
+      setStatus(err.message);
+    }
+  }
+
+  function renderCoverParams() {
+    ui.params.replaceChildren();
+    const tabs = document.createElement("div");
+    tabs.className = "event-tabs";
+    tabs.append(Object.assign(document.createElement("span"), { className: "active", textContent: "Settings" }));
+    ui.params.append(tabs);
+    if (!state.cover) {
+      ui.params.append(Object.assign(document.createElement("p"), { className: "muted", textContent: "Loading…" }));
+      renderTools();
+      return;
+    }
+    const fields = document.createElement("div");
+    fields.className = "event-fields";
+    fields.append(appendToggle(
+      "privacy_zone_enable",
+      () => Boolean(state.cover.privacy_zone_enable),
+      (value) => {
+        state.cover.privacy_zone_enable = value;
+        state.coverRev = (state.coverRev || 0) + 1;
+      },
+    ));
+    const label = fields.querySelector(".event-field");
+    if (label?.childNodes[0]) label.childNodes[0].textContent = "Privacy Zone";
+    ui.params.append(fields);
+    renderTools();
+  }
+
+  function renderCoverTools() {
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "event-draw-btn add";
+    add.textContent = "Add";
+    const draw = document.createElement("button");
+    draw.type = "button";
+    draw.className = "event-draw-btn";
+    draw.textContent = state.drawMode ? "Cancel" : "Draw";
+    draw.classList.toggle("active", state.drawMode);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "event-draw-btn";
+    remove.textContent = "Remove";
+    const removeAll = document.createElement("button");
+    removeAll.type = "button";
+    removeAll.className = "event-draw-btn danger";
+    removeAll.textContent = "Remove All";
+    add.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      addCoverZone();
+    });
+    draw.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleCoverDraw();
+    });
+    remove.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      removeCoverZone(state.selectedZone);
+    });
+    removeAll.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      removeCoverZone(-1);
+    });
+    ui.tools.append(add, draw, remove, removeAll);
+  }
+
+  function emptyCoverIndex() {
+    return (state.cover?.zone_info || []).findIndex((zone) => !zone.zone_enable);
+  }
+
+  function beginCoverDraw(index) {
+    const zones = state.cover?.zone_info || [];
+    if (!zones[index]) return;
+    state.selectedZone = index;
+    state.drawMode = true;
+    state.draft = [];
+    renderTools();
+    drawOverlay();
+  }
+
+  function addCoverZone() {
+    const empty = emptyCoverIndex();
+    if (empty < 0) {
+      setStatus("Zone limit reached");
+      return;
+    }
+    beginCoverDraw(empty);
+  }
+
+  function clearCoverZone(zone) {
+    zone.zone_enable = false;
+    zone.rect = { left: 0, top: 0, width: 0, height: 0 };
+  }
+
+  function removeCoverZone(index) {
+    const zones = state.cover?.zone_info || [];
+    if (index < 0) zones.forEach(clearCoverZone);
+    else if (zones[index]) clearCoverZone(zones[index]);
+    state.drawMode = false;
+    state.draft = [];
+    state.coverRev = (state.coverRev || 0) + 1;
+    renderTools();
+    drawOverlay();
+    saveCover();
+  }
+
+  function toggleCoverDraw() {
+    if (state.drawMode) {
+      cancelCoverDraw();
+      return;
+    }
+    const zones = state.cover?.zone_info || [];
+    let index = state.selectedZone;
+    if (!zones[index]?.zone_enable) {
+      index = emptyCoverIndex();
+      if (index < 0) {
+        setStatus("Zone limit reached");
+        return;
+      }
+    }
+    beginCoverDraw(index);
+  }
+
+  function cancelCoverDraw() {
+    state.drawMode = false;
+    state.draft = [];
+    renderTools();
+    drawOverlay();
+  }
+
+  function finishCoverDraw() {
+    const zone = state.cover?.zone_info?.[state.selectedZone];
+    const rect = state.draft.length >= 2 ? pointsToCoverRect(state.draft) : null;
+    state.drawMode = false;
+    state.draft = [];
+    if (zone && rect && rect.width >= 8 && rect.height >= 8) {
+      zone.rect = rect;
+      zone.zone_enable = true;
+      state.coverRev = (state.coverRev || 0) + 1;
+      queueSave();
+    }
+    renderTools();
+    drawOverlay();
+  }
+
+  async function saveCover() {
+    if (!state.cover) return;
+    const run = async () => {
+      if (!state.cover) return;
+      const rev = state.coverRev || 0;
+      const payload = {
+        channel: "CH1",
+        privacy_zone_enable: state.cover.privacy_zone_enable,
+        zone_info: (state.cover.zone_info || []).map((zone) => ({
+          ...zone,
+          rect: { ...zone.rect },
+        })),
+      };
+      try {
+        const saved = await camSettingApi(cam.id, "/video-cover", payload);
+        if ((state.coverRev || 0) !== rev) return;
+        state.cover = saved;
+        state.canvas = saved.canvas || state.canvas;
+        drawOverlay();
+      } catch (err) {
+        setStatus(err.message);
+      }
+    };
+    state.coverSave = (state.coverSave || Promise.resolve()).then(run, run);
+    return state.coverSave;
+  }
+
+  function renderDiskParams() {
+    ui.params.replaceChildren();
+    const tabs = document.createElement("div");
+    tabs.className = "event-tabs";
+    tabs.append(Object.assign(document.createElement("span"), { className: "active", textContent: "Disk" }));
+    ui.params.append(tabs);
+    if (!state.disk) {
+      ui.params.append(Object.assign(document.createElement("p"), { className: "muted", textContent: "Loading…" }));
+      renderTools();
+      return;
+    }
+    const fields = document.createElement("div");
+    fields.className = "event-fields";
+    const overwrite = state.disk.range?.over_write;
+    if (overwrite?.items) {
+      const el = appendSelect(
+        "over_write",
+        overwrite.items,
+        () => state.disk.over_write,
+        (value) => { state.disk.over_write = value; },
+      );
+      if (el.childNodes[0]) el.childNodes[0].textContent = "When disk is full";
+      const select = el.querySelector("select");
+      if (select) {
+        for (const opt of select.options) opt.textContent = diskValueLabel(opt.value);
+      }
+      fields.append(el);
+    }
+    const tableWrap = document.createElement("div");
+    tableWrap.className = "disk-table-wrap";
+    const table = document.createElement("table");
+    table.className = "disk-table";
+    const head = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    for (const label of ["No", "Type", "Status", "Capacity", "Free", "Record", "Name"]) {
+      headRow.append(Object.assign(document.createElement("th"), { textContent: label }));
+    }
+    head.append(headRow);
+    const body = document.createElement("tbody");
+    for (const disk of state.disk.disk_info || []) {
+      const row = document.createElement("tr");
+      for (const cell of [
+        disk.col_no ?? disk.id ?? "",
+        diskValueLabel(disk.device_type),
+        diskValueLabel(disk.status),
+        formatDiskMb(disk.total_size),
+        formatDiskMb(disk.free_size),
+        formatDiskTime(disk.total_time),
+        disk.serial_no || "",
+      ]) {
+        row.append(Object.assign(document.createElement("td"), { textContent: String(cell) }));
+      }
+      body.append(row);
+    }
+    if (!body.childNodes.length) {
+      const row = document.createElement("tr");
+      const empty = document.createElement("td");
+      empty.colSpan = 7;
+      empty.textContent = "No disk";
+      row.append(empty);
+      body.append(row);
+    }
+    table.append(head, body);
+    tableWrap.append(table);
+    fields.append(tableWrap);
+    ui.params.append(fields);
+    renderTools();
+  }
+
+  async function saveDisk() {
+    if (!state.disk) return;
+    try {
+      state.disk = await camSettingApi(cam.id, "/disk", { over_write: state.disk.over_write });
+      renderDiskParams();
+    } catch (err) {
+      setStatus(err.message);
+    }
+  }
+
+  function netField(label, input, extra) {
+    const wrap = document.createElement("label");
+    wrap.className = "event-field";
+    wrap.append(label);
+    if (!extra) {
+      wrap.append(input);
+      return wrap;
+    }
+    const row = document.createElement("div");
+    row.className = "net-field-row";
+    row.append(input, extra);
+    wrap.append(row);
+    return wrap;
+  }
+
+  function netText(disabled = false) {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.disabled = disabled;
+    input.spellcheck = false;
+    return input;
+  }
+
+  function renderNetworkParams() {
+    ui.params.replaceChildren();
+    const tabs = document.createElement("div");
+    tabs.className = "event-tabs";
+    tabs.append(Object.assign(document.createElement("span"), { className: "active", textContent: "General" }));
+    ui.params.append(tabs);
+    if (!state.network?.wan) {
+      ui.params.append(Object.assign(document.createElement("p"), { className: "muted", textContent: "Loading…" }));
+      renderTools();
+      return;
+    }
+    const wan = state.network.wan;
+    const dhcp = Boolean(wan.dhcp);
+    const dhcpv6 = Boolean(wan.dhcpv6);
+    const fields = document.createElement("div");
+    fields.className = "event-fields";
+
+    const dhcpToggle = document.createElement("label");
+    dhcpToggle.className = "event-field event-field-toggle";
+    dhcpToggle.append("DHCP");
+    const dhcpSw = document.createElement("input");
+    dhcpSw.type = "checkbox";
+    dhcpSw.className = "event-switch";
+    dhcpSw.checked = dhcp;
+    dhcpSw.addEventListener("change", () => {
+      wan.dhcp = dhcpSw.checked;
+      renderNetworkParams();
+    });
+    dhcpToggle.append(dhcpSw);
+    fields.append(dhcpToggle);
+
+    const ip = netText(dhcp);
+    ip.value = wan.ip_address || "";
+    ip.addEventListener("input", () => { wan.ip_address = ip.value.trim(); });
+    const test = document.createElement("button");
+    test.type = "button";
+    test.className = "event-draw-btn";
+    test.textContent = "Test";
+    test.disabled = dhcp;
+    test.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      testNetwork();
+    });
+    fields.append(netField("IP Address", ip, test));
+
+    const mask = netText(dhcp);
+    mask.value = wan.subnet_mask || "";
+    mask.addEventListener("input", () => { wan.subnet_mask = mask.value.trim(); });
+    fields.append(netField("Subnet Mask", mask));
+
+    const gateway = netText(dhcp);
+    gateway.value = wan.gateway || "";
+    gateway.addEventListener("input", () => { wan.gateway = gateway.value.trim(); });
+    fields.append(netField("Gateway", gateway));
+
+    const dhcpv6Toggle = document.createElement("label");
+    dhcpv6Toggle.className = "event-field event-field-toggle";
+    dhcpv6Toggle.append("IPv6 DHCP");
+    const dhcpv6Sw = document.createElement("input");
+    dhcpv6Sw.type = "checkbox";
+    dhcpv6Sw.className = "event-switch";
+    dhcpv6Sw.checked = dhcpv6;
+    dhcpv6Sw.addEventListener("change", () => {
+      wan.dhcpv6 = dhcpv6Sw.checked;
+      renderNetworkParams();
+    });
+    dhcpv6Toggle.append(dhcpv6Sw);
+    fields.append(dhcpv6Toggle);
+
+    const ipv6 = netText(dhcpv6);
+    ipv6.value = wan.ipv6_address || "";
+    ipv6.addEventListener("input", () => { wan.ipv6_address = ipv6.value.trim(); });
+    fields.append(netField("IPv6 Address", ipv6));
+
+    const prefix = document.createElement("input");
+    prefix.type = "number";
+    prefix.min = "1";
+    prefix.max = "128";
+    prefix.value = String(wan.ipv6_prefixlen ?? 64);
+    prefix.disabled = dhcpv6;
+    prefix.addEventListener("change", () => {
+      wan.ipv6_prefixlen = clamp(Number(prefix.value), 1, 128);
+      prefix.value = String(wan.ipv6_prefixlen);
+    });
+    fields.append(netField("Subnet Prefix Length", prefix));
+
+    const actions = document.createElement("div");
+    actions.className = "net-actions";
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "event-draw-btn add";
+    save.textContent = "Save";
+    save.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      saveNetwork();
+    });
+    const refresh = document.createElement("button");
+    refresh.type = "button";
+    refresh.className = "event-draw-btn";
+    refresh.textContent = "Refresh";
+    refresh.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      loadNetwork(true);
+    });
+    actions.append(save, refresh);
+    fields.append(actions);
+    ui.params.append(fields);
+    renderTools();
+  }
+
+  async function loadNetwork(force = false) {
+    const data = await camSettingApi(cam.id, "/network");
+    state.network = data;
+    if (force) renderNetworkParams();
+    return data;
+  }
+
+  async function saveNetwork() {
+    if (!state.network?.wan) return;
+    try {
+      setStatus("Saving network…");
+      state.network = await camSettingApi(cam.id, "/network", { wan: state.network.wan });
+      renderNetworkParams();
+      setStatus("Network settings saved");
+    } catch (err) {
+      setStatus(err.message);
+    }
+  }
+
+  async function testNetwork() {
+    if (!state.network?.wan) return;
+    try {
+      setStatus("Testing IP…");
+      await camSettingApi(cam.id, "/network/test", { ip_address: state.network.wan.ip_address });
+      setStatus("IP address is available");
+    } catch (err) {
+      setStatus(err.message);
+    }
+  }
+
+  async function selectPage(page) {
+    if (page === state.page && (
+      (page === "events" && state.config)
+      || (page === "osd" && state.osd)
+      || (page === "cover" && state.cover)
+      || (page === "disk" && state.disk)
+      || (page === "network" && state.network)
+    )) {
+      renderTypes();
+      renderParams();
+      drawOverlay();
+      return;
+    }
+    state.page = page;
+    state.drawMode = false;
+    state.draft = [];
+    state.drag = null;
+    tile.classList.toggle("settings-form", page === "disk" || page === "network");
+    tile.classList.toggle("settings-disk", page === "disk" || page === "network");
+    renderTypes();
+    try {
+      if (page === "osd") {
+        const data = await camSettingApi(cam.id, "/osd");
+        state.osd = data.config;
+        state.osdRange = data.range || {};
+        state.canvas = data.canvas || state.canvas;
+      } else if (page === "cover") {
+        const data = await camSettingApi(cam.id, "/video-cover");
+        state.cover = data;
+        state.canvas = data.canvas || state.canvas;
+        const onIdx = (data.zone_info || []).findIndex((zone) => zone.zone_enable);
+        state.selectedZone = Math.max(0, onIdx);
+      } else if (page === "disk") {
+        state.disk = await camSettingApi(cam.id, "/disk");
+      } else if (page === "network") {
+        await loadNetwork();
+      } else if (page === "events" && !state.loaded) {
+        await openEvents();
+        return;
+      }
+      renderParams();
+      drawOverlay();
+    } catch (err) {
+      setStatus(err.message);
+      ui.params.replaceChildren(Object.assign(document.createElement("p"), {
+        className: "muted",
+        textContent: err.message,
+      }));
+    }
+  }
+
+  function conflictNames(ability) {
+    for (const group of state.groups) {
+      for (const item of group.abilities) {
+        if (item.ability !== ability) continue;
+        return (item.mutual_ability || [])
+          .flatMap((mutual) => mutual.ability || [])
+          .filter((name) => name && name !== ability && state.abilities[name] === "On");
+      }
+    }
+    return [];
+  }
+
+  function askConfirm(message) {
+    return new Promise((resolve) => {
+      tile.querySelector(".event-confirm")?.remove();
+      const overlay = document.createElement("div");
+      overlay.className = "event-confirm";
+      const box = document.createElement("div");
+      box.className = "event-confirm-box";
+      const title = document.createElement("p");
+      title.className = "event-confirm-title";
+      title.textContent = "Notice";
+      const body = document.createElement("p");
+      body.textContent = message;
+      const actions = document.createElement("div");
+      actions.className = "event-confirm-actions";
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.textContent = "Cancel";
+      const ok = document.createElement("button");
+      ok.type = "button";
+      ok.className = "event-draw-btn add";
+      ok.textContent = "Confirm";
+      const finish = (value) => {
+        overlay.remove();
+        resolve(value);
+      };
+      cancel.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        finish(false);
+      });
+      ok.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        finish(true);
+      });
+      overlay.addEventListener("pointerdown", (event) => event.stopPropagation());
+      overlay.addEventListener("click", (event) => event.stopPropagation());
+      actions.append(cancel, ok);
+      box.append(title, body, actions);
+      overlay.append(box);
+      tile.append(overlay);
+    });
+  }
+
+  async function toggleAbility(ability, on) {
+    if (on) {
+      const conflicts = conflictNames(ability);
+      if (conflicts.length) {
+        const ok = await askConfirm(
+          `Activating ${eventLabel(ability)} will deactivate ${conflicts.map(eventLabel).join(", ")}. Please confirm to proceed.`,
+        );
+        if (!ok) {
+          renderTypes();
+          return;
+        }
+      }
+    }
+    try {
+      const next = await eventApi(cam.id, "", { [ability]: on });
+      state.groups = next.groups || [];
+      state.abilities = next.abilities || {};
+      renderTypes();
+      if (ability === state.ability) await selectAbility(ability, true);
+    } catch (err) {
+      setStatus(err.message);
+      renderTypes();
+    }
+  }
+
+  function defaultShape(index) {
+    const tpl = state.config.draw_add_btn || {};
+    if (Array.isArray(tpl.rule_line) && tpl.rule_line[index]) return { line: tpl.rule_line[index] };
+    if (Array.isArray(tpl.rule_rect) && tpl.rule_rect[index]) return { rect: tpl.rule_rect[index] };
+    const w = state.canvas.width;
+    const h = state.canvas.height;
+    const pad = 40 + index * 24;
+    return {
+      rect: pointsToRect([
+        [pad, pad],
+        [w - pad, pad],
+        [w - pad, h - pad],
+        [pad, h - pad],
+      ]),
+      line: { x1: pad, y1: 30, x2: pad, y2: h - 30 },
+    };
+  }
+
+  function addRule() {
+    const keys = ruleKeys(state.config);
+    const empty = keys.findIndex((key) => !state.config.rule_info[key].rule_switch);
+    if (empty < 0) {
+      setStatus("Zone limit reached");
+      return;
+    }
+    const key = keys[empty];
+    const rule = state.config.rule_info[key];
+    const shape = defaultShape(empty);
+    rule.rule_switch = true;
+    if (rule.rule_line) rule.rule_line = shape.line;
+    if (rule.rule_rect) rule.rule_rect = shape.rect;
+    state.selectedRule = empty;
+    state.drawMode = false;
+    queueSave();
+    renderTools();
+  }
+
+  function clearRule(rule) {
+    rule.rule_switch = false;
+    if (rule.rule_rect) rule.rule_rect = pointsToRect([[0, 0]]);
+    if (rule.rule_line) rule.rule_line = { x1: 0, y1: 0, x2: 0, y2: 0 };
+  }
+
+  function removeRule(index) {
+    const keys = ruleKeys(state.config);
+    if (index < 0) keys.forEach((key) => clearRule(state.config.rule_info[key]));
+    else if (keys[index]) clearRule(state.config.rule_info[keys[index]]);
+    state.drawMode = false;
+    state.draft = [];
+    queueSave();
+    renderTools();
+  }
+
+  function toggleDraw() {
+    if (state.drawMode) {
+      finishDraw();
+      return;
+    }
+    const keys = ruleKeys(state.config);
+    if (!keys.length) return;
+    let index = state.selectedRule;
+    if (!currentRule()?.rule_switch) {
+      const empty = keys.findIndex((key) => !state.config.rule_info[key].rule_switch);
+      if (empty < 0) {
+        setStatus("Zone limit reached");
+        return;
+      }
+      index = empty;
+      state.config.rule_info[keys[index]].rule_switch = true;
+    }
+    state.selectedRule = index;
+    state.drawMode = true;
+    state.draft = [];
+    renderTools();
+    drawOverlay();
+  }
+
+  function finishDraw() {
+    const rule = currentRule();
+    const minPts = ruleKind() === "line" ? 2 : Number(rule?.point_num?.[0] || 3);
+    if (!rule || state.draft.length < minPts) {
+      state.drawMode = false;
+      state.draft = [];
+      renderTools();
+      drawOverlay();
+      return;
+    }
+    if (rule.rule_line) rule.rule_line = pointsToLine(state.draft);
+    if (rule.rule_rect) rule.rule_rect = pointsToRect(state.draft);
+    rule.rule_switch = true;
+    state.drawMode = false;
+    state.draft = [];
+    queueSave();
+    renderTools();
+  }
+
+  function onCanvasPointer(event) {
+    if (focusedLiveTile() !== tile) return;
+    if (state.page === "osd") {
+      onOsdPointer(event);
+      return;
+    }
+    if (state.page === "cover") {
+      onCoverPointer(event);
+      return;
+    }
+    if (state.page !== "events" || !state.config) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const m = overlayMetrics(ui.img, ui.canvas, state.canvas);
+    const [wx, wy] = m.toWorld(event.clientX, event.clientY);
+    const [sx, sy] = m.toScreen(wx, wy);
+    if (state.drawMode) {
+      if (event.type !== "pointerdown") return;
+      state.draft.push([wx, wy]);
+      const maxPts = ruleKind() === "line" ? 2 : Number(currentRule()?.point_num?.[1] || 8);
+      if (state.draft.length >= maxPts) finishDraw();
+      else drawOverlay();
+      return;
+    }
+    if (event.type === "pointerdown") {
+      const keys = ruleKeys(state.config);
+      for (let i = 0; i < keys.length; i += 1) {
+        const shape = ruleShape(state.config.rule_info[keys[i]]);
+        const screen = shape.points.map(([x, y]) => m.toScreen(x, y));
+        const hit = hitPoint(screen, sx, sy, 12);
+        if (hit >= 0) {
+          state.selectedRule = i;
+          state.drag = { index: i, point: hit };
+          ui.canvas.setPointerCapture(event.pointerId);
+          drawOverlay();
+          return;
+        }
+      }
+    }
+    if (event.type === "pointermove" && state.drag) {
+      const rule = state.config.rule_info[ruleKeys(state.config)[state.drag.index]];
+      const shape = ruleShape(rule);
+      shape.points[state.drag.point] = [wx, wy];
+      if (rule.rule_line) rule.rule_line = pointsToLine(shape.points);
+      if (rule.rule_rect) rule.rule_rect = pointsToRect(shape.points);
+      drawOverlay();
+    }
+    if (event.type === "pointerup" || event.type === "pointercancel") {
+      if (state.drag) {
+        state.drag = null;
+        queueSave();
+      }
+    }
+  }
+
+  function onOsdPointer(event) {
+    if (!state.osd) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const m = overlayMetrics(ui.img, ui.canvas, state.canvas);
+    const [wx, wy] = m.toWorld(event.clientX, event.clientY);
+    if (event.type === "pointerdown") {
+      const items = ["name", "datetime", "alarm"];
+      for (const key of items) {
+        if (!state.osd[key]?.show) continue;
+        const [sx, sy] = m.toScreen(state.osd[key].pos?.x || 0, state.osd[key].pos?.y || 0);
+        const dx = event.clientX - (ui.canvas.getBoundingClientRect().left + sx);
+        const dy = event.clientY - (ui.canvas.getBoundingClientRect().top + sy);
+        if (dx >= 0 && dy >= 0 && dx <= 120 && dy <= 24) {
+          state.drag = { key, dx: wx - (state.osd[key].pos.x || 0), dy: wy - (state.osd[key].pos.y || 0) };
+          ui.canvas.setPointerCapture(event.pointerId);
+          drawOverlay();
+          return;
+        }
+      }
+    }
+    if (event.type === "pointermove" && state.drag?.key) {
+      state.osd[state.drag.key].pos = {
+        x: Math.round(wx - state.drag.dx),
+        y: Math.round(wy - state.drag.dy),
+      };
+      drawOverlay();
+    }
+    if (event.type === "pointerup" || event.type === "pointercancel") {
+      if (state.drag) {
+        state.drag = null;
+        queueSave();
+      }
+    }
+  }
+
+  function onCoverPointer(event) {
+    if (!state.cover) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const m = overlayMetrics(ui.img, ui.canvas, state.canvas);
+    const [wx, wy] = m.toWorld(event.clientX, event.clientY);
+    const [sx, sy] = m.toScreen(wx, wy);
+    if (state.drawMode) {
+      if (event.type === "pointerdown") {
+        state.draft = [[wx, wy], [wx, wy]];
+        ui.canvas.setPointerCapture(event.pointerId);
+        drawOverlay();
+      } else if (event.type === "pointermove" && state.draft.length === 2) {
+        state.draft[1] = [wx, wy];
+        drawOverlay();
+      } else if (event.type === "pointerup") {
+        finishCoverDraw();
+      } else if (event.type === "pointercancel") {
+        cancelCoverDraw();
+      }
+      return;
+    }
+    if (event.type === "pointerdown") {
+      const zones = state.cover.zone_info || [];
+      for (let i = 0; i < zones.length; i += 1) {
+        if (!zones[i].zone_enable) continue;
+        const pts = coverRectPoints(zones[i].rect).map(([x, y]) => m.toScreen(x, y));
+        if (pts.length < 4) continue;
+        const hit = hitPoint(pts, sx, sy, 12);
+        const inside = sx >= Math.min(pts[0][0], pts[2][0]) && sx <= Math.max(pts[0][0], pts[2][0])
+          && sy >= Math.min(pts[0][1], pts[2][1]) && sy <= Math.max(pts[0][1], pts[2][1]);
+        if (hit < 0 && !inside) continue;
+        state.selectedZone = i;
+        state.drag = { index: i, point: hit >= 0 ? hit : -1, start: [wx, wy], rect: { ...zones[i].rect } };
+        ui.canvas.setPointerCapture(event.pointerId);
+        drawOverlay();
+        return;
+      }
+    }
+    if (event.type === "pointermove" && state.drag && state.drag.index != null) {
+      const zone = state.cover.zone_info[state.drag.index];
+      const start = state.drag.rect;
+      if (state.drag.point === -1) {
+        zone.rect = {
+          ...start,
+          left: Math.round(start.left + (wx - state.drag.start[0])),
+          top: Math.round(start.top + (wy - state.drag.start[1])),
+        };
+      } else {
+        const pts = coverRectPoints(start);
+        pts[state.drag.point] = [wx, wy];
+        if (state.drag.point === 0) {
+          pts[1][1] = wy;
+          pts[3][0] = wx;
+        } else if (state.drag.point === 1) {
+          pts[0][1] = wy;
+          pts[2][0] = wx;
+        } else if (state.drag.point === 2) {
+          pts[1][0] = wx;
+          pts[3][1] = wy;
+        } else if (state.drag.point === 3) {
+          pts[0][0] = wx;
+          pts[2][1] = wy;
+        }
+        zone.rect = pointsToCoverRect(pts);
+      }
+      drawOverlay();
+    }
+    if (event.type === "pointerup" || event.type === "pointercancel") {
+      if (state.drag) {
+        state.drag = null;
+        state.coverRev = (state.coverRev || 0) + 1;
+        queueSave();
+      }
+    }
+  }
+
+  async function selectAbility(ability, force = false) {
+    state.page = "events";
+    if (!force && ability === state.ability && state.config) {
+      renderTypes();
+      return;
+    }
+    state.ability = ability;
+    state.drawMode = false;
+    state.draft = [];
+    state.selectedRule = 0;
+    renderTypes();
+    try {
+      const data = await eventApi(cam.id, `/${encodeURIComponent(ability)}`);
+      state.config = data.config;
+      state.range = data.range || {};
+      state.canvas = data.canvas || state.canvas;
+      const keys = ruleKeys(state.config);
+      const onIdx = keys.findIndex((key) => state.config.rule_info[key].rule_switch);
+      state.selectedRule = Math.max(0, onIdx);
+      renderParams();
+      drawOverlay();
+    } catch (err) {
+      state.config = null;
+      renderParams();
+      setStatus(err.message);
+    }
+  }
+
+  async function openEvents() {
+    const list = await eventApi(cam.id, "");
+    state.groups = list.groups || [];
+    state.abilities = list.abilities || {};
+    const on = Object.entries(state.abilities).find(([, v]) => v === "On");
+    state.ability = on?.[0] || state.ability || "Intrusion";
+    state.loaded = true;
+    renderTypes();
+    await selectAbility(state.ability, true);
+  }
+
+  async function openStudio() {
+    try {
+      await selectPage(state.page);
+    } catch (err) {
+      ui.types.replaceChildren(Object.assign(document.createElement("p"), {
+        className: "muted",
+        textContent: err.message,
+      }));
+    }
+  }
+
+  function closeStudio() {
+    state.drawMode = false;
+    clearTimeout(state.saveTimer);
+  }
+
+  ui.canvas.addEventListener("pointerdown", onCanvasPointer);
+  ui.canvas.addEventListener("pointermove", onCanvasPointer);
+  ui.canvas.addEventListener("pointerup", onCanvasPointer);
+  ui.canvas.addEventListener("pointercancel", onCanvasPointer);
+  ui.tools.addEventListener("pointerdown", (event) => event.stopPropagation());
+  ui.tools.addEventListener("click", (event) => event.stopPropagation());
+  ui.img.addEventListener("load", () => drawOverlay());
+  const ro = new ResizeObserver(() => drawOverlay());
+  ro.observe(ui.stage);
+  tile._openEvents = openStudio;
+  tile._closeEvents = closeStudio;
+}
+
 function makeLiveTile(cam) {
   const label = cameraName(cam);
   const tile = document.createElement("article");
@@ -574,7 +2470,18 @@ function makeLiveTile(cam) {
   const img = document.createElement("img");
   img.alt = label;
   img.src = `/stream/${encodeURIComponent(cam.id)}`;
-  stage.append(img);
+  const overlay = document.createElement("canvas");
+  overlay.className = "event-overlay";
+  stage.append(img, overlay);
+  const types = document.createElement("aside");
+  types.className = "event-types";
+  const main = document.createElement("div");
+  main.className = "event-main";
+  const tools = document.createElement("div");
+  tools.className = "event-tools";
+  const params = document.createElement("div");
+  params.className = "event-params";
+  main.append(stage, tools, params);
   const bar = document.createElement("div");
   bar.className = "live-tile-bar";
   const name = document.createElement("span");
@@ -588,6 +2495,25 @@ function makeLiveTile(cam) {
     event.stopPropagation();
     toggleMute();
   });
+  const settingsBtn = document.createElement("button");
+  settingsBtn.type = "button";
+  settingsBtn.className = "live-tile-settings";
+  settingsBtn.textContent = "Settings";
+  settingsBtn.setAttribute("aria-label", "Camera settings");
+  settingsBtn.setAttribute("aria-pressed", "false");
+  settingsBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const open = !tile.classList.contains("settings-open");
+    tile.classList.toggle("settings-open", open);
+    settingsBtn.classList.toggle("active", open);
+    settingsBtn.setAttribute("aria-pressed", open ? "true" : "false");
+    if (open) {
+      tile._openEvents?.();
+      requestAnimationFrame(() => tile._openEvents?.());
+    } else {
+      tile._closeEvents?.();
+    }
+  });
   const removeBtn = document.createElement("button");
   removeBtn.type = "button";
   removeBtn.className = "live-tile-remove";
@@ -596,14 +2522,14 @@ function makeLiveTile(cam) {
     event.stopPropagation();
     removeLiveCamera(cam);
   });
-  bar.append(name, muteBtn, removeBtn);
+  bar.append(name, muteBtn, settingsBtn, removeBtn);
   if (cam.ptz) {
     const { panel, toggle } = makePtzPanel(cam, tile);
     removeBtn.before(toggle);
-    tile.append(stage, bar, panel);
-  } else {
-    tile.append(stage, bar);
+    stage.append(panel);
   }
+  tile.append(types, main, bar);
+  initEventStudio(tile, cam, { types, tools, params, canvas: overlay, img, stage });
   tile.addEventListener("click", () => {
     openLiveTile(tile);
   });
@@ -1099,70 +3025,97 @@ function makeGroupRow(group) {
   tr.dataset.id = String(group.id);
   tr.dataset.matchName = group.name || "";
   tr.dataset.canDel = String(group.canDel ?? 1);
+  const locked = Number(group.canDel) === 0;
 
   const statusTd = document.createElement("td");
+  statusTd.className = "col-status";
   const status = document.createElement("span");
   status.className = `group-status ${policyClass(group.policy)}`;
+  status.title = policyClass(group.policy);
   statusTd.append(status);
 
   const nameTd = document.createElement("td");
+  nameTd.dataset.label = "Group Name";
   const name = document.createElement("input");
   name.type = "text";
   name.value = group.name || "";
   name.dataset.field = "name";
+  name.readOnly = locked;
+  if (locked) name.title = "Built-in group";
   nameTd.append(name);
 
   const delTd = document.createElement("td");
+  delTd.dataset.label = "Delete";
   const del = iconButton(
     "Delete",
     '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M9 7V5h6v2M8 7l1 12h6l1-12"/></svg>',
   );
-  del.disabled = Number(group.canDel) === 0;
+  del.classList.add("group-del");
+  del.disabled = locked;
   del.addEventListener("click", () => deleteGroupRow(tr, group));
   delTd.append(del);
 
   const editTd = document.createElement("td");
+  editTd.dataset.label = "Edit";
   const edit = iconButton(
-    "Edit",
+    "Edit faces",
     '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20h4l10.5-10.5-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg>',
   );
   edit.addEventListener("click", () => openEditGroup(group));
   editTd.append(edit);
 
   const enableTd = document.createElement("td");
+  enableTd.dataset.label = "Enable";
   const enable = toggleSwitch(Number(group.enabled) === 1);
   enable._input.dataset.field = "enabled";
   enableTd.append(enable);
 
   const alarmTd = document.createElement("td");
+  alarmTd.dataset.label = "Alarm";
   const alarm = toggleSwitch(Number(group.enableAlarm) === 1);
   alarm._input.dataset.field = "enableAlarm";
   alarmTd.append(alarm);
 
   const policyTd = document.createElement("td");
-  const policy = document.createElement("select");
-  policy.dataset.field = "policy";
-  for (const [v, label] of [
-    ["0", "Allow"],
-    ["1", "Deny"],
-    ["2", "Stranger"],
-  ]) {
-    const opt = document.createElement("option");
-    opt.value = v;
-    opt.textContent = label;
-    policy.append(opt);
+  policyTd.dataset.label = "Policy";
+  const policyLabels = { 0: "Allow", 1: "Deny", 2: "Stranger" };
+  if (locked) {
+    const policyText = document.createElement("span");
+    policyText.className = "policy-locked";
+    policyText.textContent = policyLabels[Number(group.policy)] || "Allow";
+    const hidden = document.createElement("input");
+    hidden.type = "hidden";
+    hidden.dataset.field = "policy";
+    hidden.value = String(group.policy ?? 0);
+    policyTd.append(policyText, hidden);
+  } else {
+    const policy = document.createElement("select");
+    policy.dataset.field = "policy";
+    for (const [v, label] of [
+      ["0", "Allow"],
+      ["1", "Deny"],
+      ["2", "Stranger"],
+    ]) {
+      const opt = document.createElement("option");
+      opt.value = v;
+      opt.textContent = label;
+      policy.append(opt);
+    }
+    policy.value = String(group.policy ?? 0);
+    policy.addEventListener("change", () => {
+      status.className = `group-status ${policyClass(policy.value)}`;
+      status.title = policyClass(policy.value);
+    });
+    policyTd.append(policy);
   }
-  policy.value = String(group.policy ?? 0);
-  policy.addEventListener("change", () => {
-    status.className = `group-status ${policyClass(policy.value)}`;
-  });
-  policyTd.append(policy);
 
   const simTd = document.createElement("td");
+  simTd.dataset.label = "Similarity";
   const simWrap = document.createElement("div");
   simWrap.className = "similarity-cell";
   const op = document.createElement("select");
   op.dataset.field = "detectType";
+  op.setAttribute("aria-label", "Similarity operator");
   for (const [v, label] of [
     ["0", "≥"],
     ["1", "<"],
@@ -1178,13 +3131,46 @@ function makeGroupRow(group) {
   sim.min = "0";
   sim.max = "100";
   sim.dataset.field = "similarity";
+  sim.setAttribute("aria-label", "Similarity percent");
   sim.value = group.similarity ?? 70;
   const pct = document.createElement("span");
   pct.textContent = "%";
   simWrap.append(op, sim, pct);
   simTd.append(simWrap);
 
-  tr.append(statusTd, nameTd, delTd, editTd, enableTd, alarmTd, policyTd, simTd);
+  const gearSvg =
+    '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
+
+  const linkageTd = document.createElement("td");
+  linkageTd.dataset.label = "Alarm Linkage";
+  const linkage = iconButton("Alarm Linkage", gearSvg);
+  linkage.classList.add("group-gear");
+  linkage.addEventListener("click", () => {
+    statusEl.textContent = `Alarm Linkage for "${group.name || "group"}" is set on the camera (IMPACT → Event → List Management)`;
+  });
+  linkageTd.append(linkage);
+
+  const scheduleTd = document.createElement("td");
+  scheduleTd.dataset.label = "Alarm Schedule";
+  const schedule = iconButton("Alarm Schedule", gearSvg);
+  schedule.classList.add("group-gear");
+  schedule.addEventListener("click", () => {
+    statusEl.textContent = `Alarm Schedule for "${group.name || "group"}" is set on the camera (IMPACT → Event → List Management)`;
+  });
+  scheduleTd.append(schedule);
+
+  tr.append(
+    statusTd,
+    nameTd,
+    delTd,
+    editTd,
+    enableTd,
+    alarmTd,
+    policyTd,
+    simTd,
+    linkageTd,
+    scheduleTd,
+  );
   return tr;
 }
 
@@ -1702,7 +3688,9 @@ async function loadFaces(page = facesPage) {
       facesPage = 0;
       facesGrid.replaceChildren();
       facesEmpty.hidden = false;
-      facesEmpty.textContent = "No snapshots yet";
+      facesEmpty.textContent = facesFilterActive()
+        ? "No snapshots match this filter"
+        : "No snapshots yet";
       updateFacesPager();
       poll = true;
       return;
@@ -1970,11 +3958,15 @@ for (const all of facesFilterForm.querySelectorAll("input[data-all]")) {
     for (const box of facesFilterForm.querySelectorAll(`input[name="${name}"]`)) {
       box.checked = all.checked;
     }
+    syncFacesFilterButton();
   });
 }
 
 for (const box of facesFilterForm.querySelectorAll("input[name]")) {
-  box.addEventListener("change", () => syncFaceFeatureAll(box.name));
+  box.addEventListener("change", () => {
+    syncFaceFeatureAll(box.name);
+    syncFacesFilterButton();
+  });
 }
 
 facesFilterForm.addEventListener("submit", (event) => {
@@ -1982,14 +3974,18 @@ facesFilterForm.addEventListener("submit", (event) => {
   for (const all of facesFilterForm.querySelectorAll("input[data-all]")) {
     syncFaceFeatureAll(all.dataset.all);
   }
+  syncFacesFilterButton();
   closeFaceFeatures();
   facesPage = 0;
   loadFaces();
 });
 
+facesFilterForm.addEventListener("pointerdown", (event) => event.stopPropagation());
 document.addEventListener("click", () => {
   if (!facesFilterForm.hidden) closeFaceFeatures();
 });
+syncFacesFilterButton();
+
 snapsCam.addEventListener("change", () => {
   lastCamId = snapsCam.value;
   snapPage = 0;

@@ -33,12 +33,43 @@ function isUnreachable(err) {
     /Failed to connect|No route to host|Connection refused/i.test(String(err?.stderr || err?.message || ""));
 }
 
+function isTimeout(err) {
+  const code = err?.code;
+  return code === 28 || code === "28" ||
+    /timed out|Timeout/i.test(String(err?.stderr || err?.message || ""));
+}
+
+function isTransient(err) {
+  const code = err?.code;
+  return isTimeout(err) || isUnreachable(err) || code === 52 || code === "52";
+}
+
 function isDeadSession(err) {
   const code = err?.code;
   return code === 56 || code === "56" ||
     err?.message === "no_login" ||
     err?.message === "no_heartbeat" ||
     err instanceof SyntaxError;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function cameraError(host, err) {
+  if (err?.message && !/Command failed:|curl |Cookie:|csrftoken|-u /i.test(err.message) && err.status) {
+    return err;
+  }
+  const out = isTimeout(err)
+    ? new Error(`camera timed out: ${host}`)
+    : isUnreachable(err)
+      ? new Error(`camera unreachable: ${host}`)
+      : err instanceof SyntaxError
+        ? new Error("camera returned invalid JSON")
+        : new Error(`camera request failed: ${host}`);
+  out.code = isTimeout(err) ? 28 : isUnreachable(err) ? 7 : err?.code;
+  out.status = isTimeout(err) ? 504 : isUnreachable(err) ? 503 : 502;
+  return out;
 }
 
 function authOf(cam) {
@@ -67,9 +98,9 @@ export function createSession(cam) {
   const hdrFile = path.join(os.tmpdir(), `cam-${auth.id}.hdr`);
   const bodyFile = path.join(os.tmpdir(), `cam-${auth.id}.body`);
 
-  async function login() {
+  async function login(retries = 1) {
     if (Date.now() < blockedUntil) {
-      throw Object.assign(new Error(`camera unreachable: ${auth.host}`), { code: 7 });
+      throw Object.assign(new Error(`camera unreachable: ${auth.host}`), { code: 7, status: 503 });
     }
     try {
       await execFileAsync(curlBin, [
@@ -78,6 +109,8 @@ export function createSession(cam) {
         "--digest",
         "-u", `${auth.username}:${auth.password}`,
         "-sS",
+        "--connect-timeout", "10",
+        "--max-time", "25",
         "-D", hdrFile,
         "-o", bodyFile,
         "-H", "Content-Type: application/json",
@@ -96,6 +129,10 @@ export function createSession(cam) {
       connectFails = 0;
       blockedUntil = 0;
     } catch (err) {
+      if (retries > 0 && isTransient(err)) {
+        await delay(500);
+        return login(retries - 1);
+      }
       if (isUnreachable(err)) {
         connectFails += 1;
         if (connectFails >= 2) {
@@ -104,13 +141,13 @@ export function createSession(cam) {
           console.error(`camera ${auth.host} unreachable after 2 attempts, backing off`);
         }
       }
-      throw err;
+      throw cameraError(auth.host, err);
     }
   }
 
   async function postNow(apiPath, data, retries = 1) {
-    if (!cookie) await login();
     try {
+      if (!cookie) await login();
       const { stdout } = await execFileAsync(
         curlBin,
         [
@@ -118,8 +155,8 @@ export function createSession(cam) {
           "--tls-max", "1.2",
           "--http1.1",
           "-sS",
-          "--connect-timeout", "5",
-          "--max-time", "20",
+          "--connect-timeout", "10",
+          "--max-time", "25",
           "-H", "Content-Type: application/json",
           "-H", `Cookie: session_443=${cookie}`,
           "-H", `X-csrftoken: ${csrf}`,
@@ -135,11 +172,15 @@ export function createSession(cam) {
       }
       return json;
     } catch (err) {
-      if (retries < 1 || !isDeadSession(err)) throw err;
-      cookie = "";
-      csrf = "";
-      await login();
-      return postNow(apiPath, data, retries - 1);
+      if (retries > 0 && (isDeadSession(err) || isTransient(err))) {
+        if (isDeadSession(err) || isTimeout(err) || isUnreachable(err)) {
+          cookie = "";
+          csrf = "";
+        }
+        await delay(500);
+        return postNow(apiPath, data, retries - 1);
+      }
+      throw cameraError(auth.host, err);
     }
   }
 

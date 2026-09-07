@@ -16,6 +16,21 @@ import {
   refreshPtz,
 } from "../utils/zoom.js";
 import {
+  getEventSettings,
+  setEventSettings,
+  getEventConfig,
+  setEventConfig,
+  getOsdSettings,
+  setOsdSettings,
+  getVideoCover,
+  setVideoCover,
+  getDiskSettings,
+  setDiskSettings,
+  getNetworkSettings,
+  setNetworkSettings,
+  testNetworkAddress,
+} from "../utils/settings.js";
+import {
   listGroups,
   addGroup,
   modifyGroup,
@@ -150,6 +165,113 @@ app.post("/api/cameras/:id/ptz/restore", asyncRoute(async (req, res) => {
 app.post("/api/cameras/:id/ptz/refresh", asyncRoute(async (req, res) => {
   try {
     res.json(await refreshPtz(req.params.id));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+}));
+
+app.get("/api/cameras/:id/events", asyncRoute(async (req, res) => {
+  try {
+    res.json(await getEventSettings(req.params.id, req.query.channel));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+}));
+
+app.post("/api/cameras/:id/events", asyncRoute(async (req, res) => {
+  try {
+    res.json(await setEventSettings(req.params.id, req.body ?? {}));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+}));
+
+app.get("/api/cameras/:id/events/:ability", asyncRoute(async (req, res) => {
+  try {
+    res.json(await getEventConfig(req.params.id, req.params.ability, req.query.channel));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+}));
+
+app.post("/api/cameras/:id/events/:ability", asyncRoute(async (req, res) => {
+  try {
+    res.json(await setEventConfig(req.params.id, {
+      ...(req.body ?? {}),
+      ability: req.params.ability,
+    }));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+}));
+
+app.get("/api/cameras/:id/osd", asyncRoute(async (req, res) => {
+  try {
+    res.json(await getOsdSettings(req.params.id, req.query.channel));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+}));
+
+app.post("/api/cameras/:id/osd", asyncRoute(async (req, res) => {
+  try {
+    res.json(await setOsdSettings(req.params.id, req.body ?? {}));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+}));
+
+app.get("/api/cameras/:id/video-cover", asyncRoute(async (req, res) => {
+  try {
+    res.json(await getVideoCover(req.params.id, req.query.channel));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+}));
+
+app.post("/api/cameras/:id/video-cover", asyncRoute(async (req, res) => {
+  try {
+    res.json(await setVideoCover(req.params.id, req.body ?? {}));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+}));
+
+app.get("/api/cameras/:id/disk", asyncRoute(async (req, res) => {
+  try {
+    res.json(await getDiskSettings(req.params.id));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+}));
+
+app.post("/api/cameras/:id/disk", asyncRoute(async (req, res) => {
+  try {
+    res.json(await setDiskSettings(req.params.id, req.body ?? {}));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+}));
+
+app.get("/api/cameras/:id/network", asyncRoute(async (req, res) => {
+  try {
+    res.json(await getNetworkSettings(req.params.id));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+}));
+
+app.post("/api/cameras/:id/network", asyncRoute(async (req, res) => {
+  try {
+    res.json(await setNetworkSettings(req.params.id, req.body ?? {}));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+}));
+
+app.post("/api/cameras/:id/network/test", asyncRoute(async (req, res) => {
+  try {
+    res.json(await testNetworkAddress(req.params.id, req.body?.ip_address));
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message });
   }

@@ -3,6 +3,7 @@ import { assignGroupsToFaces, groupIdsForUuids, groupMap, recentGroupStats } fro
 
 const MAX_PAGE = 40;
 
+// Honeywell Search codes — every field starts at 0 (same as their web request).
 const GENDER = { male: 0, female: 1 };
 const AGE = { under_18: 0, "18_25": 1, "26_30": 2, "31_35": 3, "36_40": 4, "41_50": 5, over_50: 6 };
 const MASK = { unmasked: 0, masked: 1 };
@@ -13,8 +14,6 @@ const jpegCache = new Map();
 const JPEG_CACHE_MAX = 120;
 const JPEG_CHUNK = 6;
 const JPEG_CONCURRENCY = 2;
-const simpleInfoPref = new Map();
-const SIMPLE_INFO_TTL_MS = 120_000;
 const groupMapCache = new Map();
 const GROUP_MAP_TTL_MS = 30_000;
 
@@ -35,6 +34,16 @@ function codes(value, table) {
     }
   }
   return [...new Set(out)];
+}
+
+/**
+ * Honeywell Search: omit a field with [] when nothing (or everything) is selected.
+ */
+function filterCodes(value, table) {
+  const picked = codes(value, table);
+  const all = [...new Set(Object.values(table))];
+  if (!picked.length || picked.length >= all.length) return [];
+  return picked;
 }
 
 function today() {
@@ -178,26 +187,9 @@ async function getSnapRows(session, startIndex, count) {
     WithFeature: 0,
     NeedTime: 1,
   };
-  const camId = session.id;
-  const pref = simpleInfoPref.get(camId);
-  const cached = pref && Date.now() - pref.at < SIMPLE_INFO_TTL_MS ? pref.value : null;
-  const order = cached == null ? [0, 1] : [cached];
-
-  for (const simple of order) {
-    const withImage = simple === 0;
-    const rows = await fetchSnapPage(session, body, simple, withImage);
-    if (rows.length) {
-      simpleInfoPref.set(camId, { value: simple, at: Date.now() });
-      return rows;
-    }
-  }
-  if (cached != null) {
-    const other = cached === 1 ? 0 : 1;
-    const rows = await fetchSnapPage(session, body, other, other === 0);
-    if (rows.length) {
-      simpleInfoPref.set(camId, { value: other, at: Date.now() });
-      return rows;
-    }
+  for (const simple of [0, 1]) {
+    const rows = await fetchSnapPage(session, body, simple, simple === 0);
+    if (rows.length) return rows;
   }
   return [];
 }
@@ -258,11 +250,7 @@ async function resolveNames(session, rows) {
   return names;
 }
 
-export async function listSnappedFaces(opts = {}) {
-  return listSnappedFacesWork(opts);
-}
-
-async function listSnappedFacesWork({
+export async function listSnappedFaces({
   cam,
   offset = 0,
   limit,
@@ -286,12 +274,12 @@ async function listSnappedFacesWork({
     EndTime: `${date} 23:59:59`,
     Chn: 0,
     AlarmGroup: [],
-    Expression: codes(expression, EXPRESSION),
+    Expression: filterCodes(expression, EXPRESSION),
     FaceInfo: [],
-    fAttrAge: codes(age, AGE),
-    Gender: codes(gender, GENDER),
-    GlassesType: codes(glasses, GLASSES),
-    MouthMask: codes(mask, MASK),
+    fAttrAge: filterCodes(age, AGE),
+    Gender: filterCodes(gender, GENDER),
+    GlassesType: filterCodes(glasses, GLASSES),
+    MouthMask: filterCodes(mask, MASK),
     Similarity: 0,
     Engine: 1,
     Count: 0,
