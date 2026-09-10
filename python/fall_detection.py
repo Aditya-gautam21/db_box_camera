@@ -1,7 +1,8 @@
 import os
 from datetime import datetime
 import cv2
-from ultralytics import YOLO
+from ai_config import infer_lock, load_yolo, yolo_kw
+from preview import draw_box
 
 DROP_PX_S = 120
 DROP_WINDOW = 2.0
@@ -11,7 +12,7 @@ def is_fall(kxy, kconf, xyxy):
     if kxy is None or len(kxy) < 13:
         return False
     for i in (5, 6, 11, 12):
-        if kconf is not None and float(kconf[i]) < 0.3:
+        if kconf is not None and float(kconf[i]) < 0.4:
             return False
     shoulder = (kxy[5] + kxy[6]) / 2
     hip = (kxy[11] + kxy[12]) / 2
@@ -30,16 +31,17 @@ class FallDetector:
     def __init__(self, output_dir="data/fall"):
         self.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
-        self.model = YOLO(model="yolo26n-pose.pt")
+        self.model = load_yolo("yolo26n-pose.pt")
         self.tracks = {}
         self.alerted = set()
         self.last_vis = None
+        self.overlay = []
 
-    def detect(self, frame, now):
+    def detect(self, frame, now, vis=None):
         events = []
-        r = self.model.track(frame, persist=True, verbose=False, conf=0.45)[0]
-        vis = r.plot()
-        self.last_vis = vis
+        overlay = []
+        with infer_lock:
+            r = self.model.track(frame, persist=True, conf=0.45, **yolo_kw())[0]
         live = set()
 
         if r.boxes is not None and r.keypoints is not None and r.boxes.id is not None:
@@ -56,20 +58,24 @@ class FallDetector:
                 dropped = st["drop_t"] is not None and (now - st["drop_t"]) <= DROP_WINDOW
                 fallen = is_fall(kxy, kconf, xyxy)
                 x1, y1 = int(xyxy[0]), int(xyxy[1])
+                label = f"id {tid}"
+                down = False
 
                 if fallen and (dropped or st["since"] is not None):
                     if st["since"] is None:
                         st["since"] = now
                     held = now - st["since"]
+                    down = True
                     label = "FALL" if held >= HOLD_S or tid in self.alerted else f"DOWN {held:.0f}/{HOLD_S:.0f}s"
-                    cv2.putText(vis, label, (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
                     if held >= HOLD_S and tid not in self.alerted:
                         self.alerted.add(tid)
+                        snap = r.plot()
+                        cv2.putText(snap, label, (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
                         path = os.path.join(
                             self.output_dir,
                             f"fall_{datetime.now().replace(microsecond=0)}_{tid}.jpg",
                         )
-                        cv2.imwrite(path, vis)
+                        cv2.imwrite(path, snap)
                         events.append({
                             "type": "fall",
                             "track": int(tid),
@@ -85,10 +91,16 @@ class FallDetector:
 
                 st["y"], st["t"] = y, now
                 self.tracks[tid] = st
+                color = (0, 0, 255) if down or tid in self.alerted else (0, 180, 255)
+                overlay.append((xyxy, color, f"fall {label}"))
+                if vis is not None:
+                    draw_box(vis, xyxy, color, f"fall {label}")
 
         for tid in list(self.tracks):
             if tid not in live:
                 self.tracks.pop(tid, None)
                 self.alerted.discard(tid)
 
+        self.overlay = overlay
+        self.last_vis = vis
         return events

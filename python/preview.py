@@ -32,17 +32,21 @@ def letterbox(img, tw, th):
     return canvas
 
 
+def draw_box(img, xyxy, color, label=""):
+    x1, y1, x2, y2 = (int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3]))
+    cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+    if label:
+        cv2.putText(img, label, (x1, max(14, y1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+
+
 class Preview:
     def __init__(self, title=WIN):
         self.title = title
         self.ok = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
         if not self.ok:
             return
-        tw, th = screen_size()
         try:
             cv2.namedWindow(title, cv2.WINDOW_NORMAL)
-            cv2.imshow(title, np.zeros((th, tw, 3), dtype=np.uint8))
-            cv2.setWindowProperty(title, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         except cv2.error:
             self.ok = False
 
@@ -53,7 +57,7 @@ class Preview:
                 return w, h
         except cv2.error:
             pass
-        return screen_size()
+        return 960, 540
 
     def show(self, frame):
         if not self.ok:
