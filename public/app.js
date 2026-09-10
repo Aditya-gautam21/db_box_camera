@@ -4,6 +4,7 @@ const liveBtn = document.getElementById("btn-live");
 const clipBtn = document.getElementById("btn-clip");
 const facesBtn = document.getElementById("btn-faces");
 const groupsBtn = document.getElementById("btn-groups");
+const aiBtn = document.getElementById("btn-ai");
 const clipForm = document.getElementById("clip-form");
 const player = document.getElementById("player");
 const livePage = document.getElementById("live-page");
@@ -19,6 +20,7 @@ const cameraModal = document.getElementById("camera-modal");
 const cameraForm = document.getElementById("camera-form");
 const facesGallery = document.getElementById("faces-gallery");
 const groupsPage = document.getElementById("groups-page");
+const aiPage = document.getElementById("ai-page");
 const facesGrid = document.getElementById("faces-grid");
 const facesEmpty = document.getElementById("faces-empty");
 const facesCam = document.getElementById("faces-cam");
@@ -101,6 +103,28 @@ let facesFetchId = 0;
 let facesResizeTimer;
 let lastCamId = "";
 const snapSelected = new Set();
+let aiPoll = null;
+let aiBound = false;
+let aiDrawMode = false;
+let aiDraft = null;
+let aiModel = "area_intrusion";
+let aiModels = {
+  area_intrusion: true,
+  line_cross: true,
+  fall: true,
+  fire: true,
+  face: false,
+};
+let aiZone = { a: null, b: null, cam: null };
+let aiLine = { a: null, b: null, side: null, cam: null };
+
+const AI_MODEL_LIST = [
+  { id: "area_intrusion", label: "Area intrusion", draw: "box" },
+  { id: "line_cross", label: "Line crossing", draw: "line" },
+  { id: "fall", label: "Fall", draw: null },
+  { id: "fire", label: "Fire", draw: null },
+  { id: "face", label: "Face", draw: null },
+];
 
 function localInputValue(date) {
   const p = (n) => String(n).padStart(2, "0");
@@ -261,17 +285,29 @@ function focusedLiveTile() {
   return fs?.classList?.contains("live-tile") ? fs : null;
 }
 
+function syncLiveTileFs() {
+  const tile = focusedLiveTile();
+  for (const el of liveDash.querySelectorAll(".live-tile")) {
+    el.classList.toggle("is-fs", el === tile);
+  }
+  return tile;
+}
+
 function openLiveTile(tile) {
-  if (focusedLiveTile() === tile) return;
+  if (focusedLiveTile() === tile) {
+    tile.classList.add("is-fs");
+    return;
+  }
+  tile.classList.add("is-fs");
   const enter = tile.requestFullscreen || tile.webkitRequestFullscreen;
   enter?.call(tile);
 }
 
 function onLiveTileFullscreen() {
-  const tile = focusedLiveTile();
+  const tile = syncLiveTileFs();
   if (!tile) {
     for (const el of liveDash.querySelectorAll(".live-tile")) {
-      el.classList.remove("settings-open");
+      el.classList.remove("settings-open", "is-fs");
       el.querySelector(".live-tile-settings")?.classList.remove("active");
       el.querySelector(".live-tile-settings")?.setAttribute("aria-pressed", "false");
       el._closeEvents?.();
@@ -2504,6 +2540,7 @@ function makeLiveTile(cam) {
   settingsBtn.addEventListener("click", (event) => {
     event.stopPropagation();
     const open = !tile.classList.contains("settings-open");
+    if (open) openLiveTile(tile);
     tile.classList.toggle("settings-open", open);
     settingsBtn.classList.toggle("active", open);
     settingsBtn.setAttribute("aria-pressed", open ? "true" : "false");
@@ -2839,10 +2876,412 @@ function toggleFullscreen() {
   enter?.call(player);
 }
 
+function stopAiPage() {
+  clearInterval(aiPoll);
+  aiPoll = null;
+  aiDrawMode = false;
+  aiDraft = null;
+  const img = document.getElementById("ai-view");
+  if (img) img.removeAttribute("src");
+}
+
+function selectedAiCam() {
+  return document.getElementById("ai-cam")?.value || "";
+}
+
+function aiModelInfo(id = aiModel) {
+  return AI_MODEL_LIST.find((item) => item.id === id) || AI_MODEL_LIST[0];
+}
+
+function syncAiTools() {
+  const tools = document.getElementById("ai-tools");
+  const draw = document.getElementById("ai-draw");
+  if (!tools || !draw) return;
+  const kind = aiModelInfo().draw;
+  tools.hidden = !kind;
+  draw.textContent = aiDrawMode ? "Cancel" : "Draw";
+  draw.classList.toggle("active", aiDrawMode);
+}
+
+async function aiApi(method, body, cam = selectedAiCam(), path = "") {
+  const q = cam ? `?cam=${encodeURIComponent(cam)}` : "";
+  const res = await fetch(`/api/ai${path}${q}`, {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+function aiVideoMetrics(img, canvas) {
+  const cr = canvas.getBoundingClientRect();
+  const ir = img.getBoundingClientRect();
+  const nw = img.naturalWidth;
+  const nh = img.naturalHeight;
+  if (!nw || !nh || !ir.width || !ir.height) return null;
+  const scale = Math.min(ir.width / nw, ir.height / nh);
+  const dw = nw * scale;
+  const dh = nh * scale;
+  const left = ir.left - cr.left + (ir.width - dw) / 2;
+  const top = ir.top - cr.top + (ir.height - dh) / 2;
+  return {
+    toNorm(clientX, clientY) {
+      const x = (clientX - cr.left - left) / dw;
+      const y = (clientY - cr.top - top) / dh;
+      return [clamp(x, 0, 1), clamp(y, 0, 1)];
+    },
+    toScreen(nx, ny) {
+      return [left + nx * dw, top + ny * dh];
+    },
+  };
+}
+
+function drawAiOverlay() {
+  const img = document.getElementById("ai-view");
+  const canvas = document.getElementById("ai-overlay");
+  if (!img || !canvas) return;
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  if (!w || !h) return;
+  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const kind = aiModelInfo().draw;
+  const cam = selectedAiCam();
+  let box = aiDraft;
+  if (!box && kind === "box" && aiZone.a && aiZone.b && (!aiZone.cam || aiZone.cam === cam)) {
+    box = [aiZone.a, aiZone.b];
+  }
+  if (!box && kind === "line" && aiLine.a && aiLine.b && (!aiLine.cam || aiLine.cam === cam)) {
+    box = [aiLine.a, aiLine.b];
+  }
+  if (!box) return;
+  const m = aiVideoMetrics(img, canvas);
+  if (!m) return;
+  const [x1, y1] = m.toScreen(box[0][0], box[0][1]);
+  const [x2, y2] = m.toScreen(box[1][0], box[1][1]);
+  ctx.strokeStyle = "#e3a45a";
+  ctx.lineWidth = 2;
+  if (kind === "line") {
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    ctx.fillStyle = "#fff";
+    for (const [x, y] of [[x1, y1], [x2, y2]]) {
+      ctx.beginPath();
+      ctx.arc(x, y, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#111";
+      ctx.stroke();
+      ctx.strokeStyle = "#e3a45a";
+    }
+    return;
+  }
+  const left = Math.min(x1, x2);
+  const top = Math.min(y1, y2);
+  ctx.fillStyle = "rgba(227, 164, 90, 0.16)";
+  ctx.fillRect(left, top, Math.abs(x2 - x1), Math.abs(y2 - y1));
+  ctx.strokeRect(left, top, Math.abs(x2 - x1), Math.abs(y2 - y1));
+}
+
+function eventLineText(event) {
+  if (event.track != null) return `Track ${event.track}`;
+  if (event.direction) return event.direction;
+  if (event.count != null) return `${event.count} fire`;
+  if (event.age != null) return `Age ${event.age}`;
+  return event.type || "alarm";
+}
+
+function renderAiTypes() {
+  const root = document.getElementById("ai-types");
+  if (!root) return;
+  root.replaceChildren();
+  root.append(Object.assign(document.createElement("p"), {
+    className: "event-group-title",
+    textContent: "Detectors",
+  }));
+  for (const item of AI_MODEL_LIST) {
+    const on = Boolean(aiModels[item.id]);
+    const card = document.createElement("div");
+    card.className = "event-card event-sub-card";
+    if (item.id === aiModel) card.classList.add("active");
+    if (on) card.classList.add("on");
+    const head = document.createElement("div");
+    head.className = "event-card-head";
+    const name = document.createElement("span");
+    name.textContent = item.label;
+    const sw = document.createElement("input");
+    sw.type = "checkbox";
+    sw.className = "event-switch";
+    sw.checked = on;
+    sw.addEventListener("click", (event) => event.stopPropagation());
+    sw.addEventListener("change", () => {
+      sw.checked = on;
+      toggleAiModel(item.id, !on);
+    });
+    head.append(name, sw);
+    card.append(head);
+    card.addEventListener("click", (event) => {
+      if (event.target.closest("input")) return;
+      selectAiModel(item.id);
+    });
+    root.append(card);
+  }
+}
+
+function selectAiModel(id) {
+  if (!AI_MODEL_LIST.some((item) => item.id === id)) return;
+  aiModel = id;
+  aiDrawMode = false;
+  aiDraft = null;
+  renderAiTypes();
+  syncAiTools();
+  renderAiStats();
+  statusEl.textContent = `AI · ${aiModelInfo().label}`;
+}
+
+async function toggleAiModel(id, on) {
+  try {
+    const data = await aiApi("POST", { [id]: on }, selectedAiCam(), "/models");
+    aiModels = { ...aiModels, ...data.models };
+    renderAiTypes();
+    renderAiStats();
+    statusEl.textContent = `${aiModelInfo(id).label} ${on ? "On" : "Off"}`;
+  } catch (err) {
+    statusEl.textContent = String(err.message || err);
+    renderAiTypes();
+  }
+}
+
+function renderAiStats(state) {
+  if (state) {
+    if (state.models) aiModels = { ...aiModels, ...state.models };
+    if (state.zone) {
+      const cam = selectedAiCam();
+      const sameCam = !state.zone.cam || !cam || state.zone.cam === cam;
+      aiZone = sameCam
+        ? { a: state.zone.a || null, b: state.zone.b || null, cam: state.zone.cam || cam || null }
+        : { a: null, b: null, cam };
+    }
+    if (state.line) {
+      const cam = selectedAiCam();
+      const sameCam = !state.line.cam || !cam || state.line.cam === cam;
+      aiLine = sameCam
+        ? {
+          a: state.line.a || null,
+          b: state.line.b || null,
+          side: state.line.side || null,
+          cam: state.line.cam || cam || null,
+        }
+        : { a: null, b: null, side: null, cam };
+    }
+  }
+  const info = aiModelInfo();
+  const modelStats = state?.stats?.[info.id] || {};
+  const live = Boolean(state?.stats?.live);
+  document.getElementById("ai-stat-kicker").textContent = "Python models";
+  document.getElementById("ai-stat-title").textContent = info.label;
+  document.getElementById("ai-stat-live").textContent = live ? "Running" : "Idle";
+  document.getElementById("ai-stat-on").textContent = aiModels[info.id] ? "On" : "Off";
+  const zoneRow = document.getElementById("ai-stat-zone-row");
+  const insideRow = document.getElementById("ai-stat-inside-row");
+  if (info.draw === "box") {
+    zoneRow.hidden = false;
+    document.getElementById("ai-stat-zone-label").textContent = "Zone";
+    document.getElementById("ai-stat-zone").textContent = aiZone.a ? "Drawn" : "None";
+  } else if (info.draw === "line") {
+    zoneRow.hidden = false;
+    document.getElementById("ai-stat-zone-label").textContent = "Line";
+    document.getElementById("ai-stat-zone").textContent = aiLine.a ? "Drawn" : "None";
+  } else {
+    zoneRow.hidden = true;
+  }
+  insideRow.hidden = info.id !== "area_intrusion";
+  document.getElementById("ai-stat-inside").textContent = String(modelStats.inside ?? 0);
+  document.getElementById("ai-stat-total").textContent = String(modelStats.total ?? 0);
+  const list = document.getElementById("ai-stat-recent");
+  list.replaceChildren();
+  const recent = [...(modelStats.recent || [])].reverse().slice(0, 12);
+  for (const event of recent) {
+    const li = document.createElement("li");
+    const when = event.t ? new Date(event.t * 1000).toLocaleTimeString() : "";
+    li.append(
+      Object.assign(document.createElement("span"), { textContent: eventLineText(event) }),
+      Object.assign(document.createElement("span"), { textContent: when }),
+    );
+    list.append(li);
+  }
+  if (!recent.length) {
+    list.append(Object.assign(document.createElement("li"), { textContent: "No alarms yet" }));
+  }
+  syncAiTools();
+  renderAiTypes();
+  drawAiOverlay();
+}
+
+async function refreshAi() {
+  const cam = selectedAiCam();
+  try {
+    renderAiStats(await aiApi("GET", null, cam));
+  } catch (err) {
+    statusEl.textContent = String(err.message || err);
+  }
+}
+
+function setAiStream(camId) {
+  const img = document.getElementById("ai-view");
+  if (!img) return;
+  aiDraft = null;
+  img.src = camId ? `/stream/${encodeURIComponent(camId)}` : "";
+}
+
+function onAiPointer(event) {
+  const kind = aiModelInfo().draw;
+  if (!aiDrawMode || !kind) return;
+  const img = document.getElementById("ai-view");
+  const canvas = document.getElementById("ai-overlay");
+  const m = aiVideoMetrics(img, canvas);
+  if (!m) return;
+  const pt = m.toNorm(event.clientX, event.clientY);
+  if (event.type === "pointerdown") {
+    event.preventDefault();
+    aiDraft = [pt, pt];
+    canvas.setPointerCapture(event.pointerId);
+    drawAiOverlay();
+    return;
+  }
+  if (event.type === "pointermove" && aiDraft) {
+    aiDraft[1] = pt;
+    drawAiOverlay();
+    return;
+  }
+  if ((event.type === "pointerup" || event.type === "pointercancel") && aiDraft) {
+    const [a, b] = aiDraft;
+    aiDraft = null;
+    aiDrawMode = false;
+    syncAiTools();
+    const len = Math.hypot(a[0] - b[0], a[1] - b[1]);
+    if (len < 0.03) {
+      drawAiOverlay();
+      return;
+    }
+    const cam = selectedAiCam();
+    if (!cam) {
+      statusEl.textContent = "Pick a camera first";
+      drawAiOverlay();
+      return;
+    }
+    const req = kind === "line"
+      ? aiApi("POST", { a, b, cam }, cam, "/line")
+      : aiApi("POST", { a, b, cam }, cam);
+    req.then((saved) => {
+      if (kind === "line") aiLine = saved;
+      else aiZone = saved;
+      statusEl.textContent = kind === "line" ? "Tripwire saved" : "Area box saved";
+      drawAiOverlay();
+    }).catch((err) => {
+      statusEl.textContent = String(err.message || err);
+    });
+  }
+}
+
+async function startAiPage() {
+  const cam = document.getElementById("ai-cam");
+  const draw = document.getElementById("ai-draw");
+  const clear = document.getElementById("ai-clear");
+  const img = document.getElementById("ai-view");
+  const canvas = document.getElementById("ai-overlay");
+  const stage = document.querySelector(".ai-stage");
+  if (!aiBound) {
+    aiBound = true;
+    cam.addEventListener("change", () => {
+      lastCamId = cam.value;
+      aiDrawMode = false;
+      aiDraft = null;
+      aiZone = { a: null, b: null, cam: cam.value || null };
+      aiLine = { a: null, b: null, side: null, cam: cam.value || null };
+      syncAiTools();
+      setAiStream(cam.value);
+      drawAiOverlay();
+      refreshAi();
+    });
+    draw.addEventListener("click", () => {
+      if (!aiModelInfo().draw) return;
+      aiDrawMode = !aiDrawMode;
+      aiDraft = null;
+      syncAiTools();
+      statusEl.textContent = aiDrawMode
+        ? (aiModelInfo().draw === "line" ? "Drag a line on the stream" : "Drag a box on the stream")
+        : `AI · ${aiModelInfo().label}`;
+      drawAiOverlay();
+    });
+    clear.addEventListener("click", async () => {
+      aiDrawMode = false;
+      aiDraft = null;
+      syncAiTools();
+      const camId = selectedAiCam();
+      const kind = aiModelInfo().draw;
+      try {
+        if (kind === "line") {
+          aiLine = await aiApi("DELETE", null, camId, "/line");
+          statusEl.textContent = "Tripwire cleared";
+        } else {
+          aiZone = await aiApi("DELETE", null, camId);
+          statusEl.textContent = "Area box cleared";
+        }
+        drawAiOverlay();
+        renderAiStats();
+      } catch (err) {
+        statusEl.textContent = String(err.message || err);
+      }
+    });
+    canvas.addEventListener("pointerdown", onAiPointer);
+    canvas.addEventListener("pointermove", onAiPointer);
+    canvas.addEventListener("pointerup", onAiPointer);
+    canvas.addEventListener("pointercancel", onAiPointer);
+    img.addEventListener("load", () => drawAiOverlay());
+    new ResizeObserver(() => drawAiOverlay()).observe(stage);
+  }
+  try {
+    await fillCamSelect(cam, lastCamId);
+    setAiStream(cam.value);
+    await refreshAi();
+  } catch (err) {
+    statusEl.textContent = String(err.message || err);
+  }
+  clearInterval(aiPoll);
+  aiPoll = setInterval(() => {
+    refreshAi().catch(() => {});
+  }, 1000);
+}
+
+function showAi({ push = true } = {}) {
+  if (push) history.pushState({}, "", "/ai");
+  setChrome({
+    page: "ai",
+    status: "AI models",
+    mode: "AI",
+    rawHref: "/api/ai",
+    rawText: "Open /api/ai",
+    showPlayer: false,
+  });
+  stopView();
+  return startAiPage();
+}
+
 function setChrome({ page, status, mode, rawHref, rawText, showPlayer = true }) {
   document.body.dataset.page = page;
   liveBtn.classList.toggle("active", page === "live");
   clipBtn.classList.toggle("active", page === "clip");
+  aiBtn.classList.toggle("active", page === "ai");
   facesBtn.classList.toggle("active", page === "faces");
   groupsBtn.classList.toggle("active", page === "groups");
   liveDot.classList.toggle("on", page === "live");
@@ -2850,11 +3289,13 @@ function setChrome({ page, status, mode, rawHref, rawText, showPlayer = true }) 
   facesGallery.hidden = page !== "faces";
   groupsPage.hidden = page !== "groups";
   livePage.hidden = page !== "live";
-  player.hidden = page === "live" || !showPlayer;
+  aiPage.hidden = page !== "ai";
+  player.hidden = page === "live" || page === "ai" || !showPlayer;
   if (page !== "live") {
     stopLiveDash();
     cameraModal.close();
   }
+  if (page !== "ai") stopAiPage();
   if (!showPlayer && isPlayerFullscreen()) {
     const exit = document.exitFullscreen || document.webkitExitFullscreen;
     exit?.call(document);
@@ -3793,6 +4234,10 @@ function applyUrl() {
     showGroups({ push: false });
     return;
   }
+  if (url.pathname === "/ai") {
+    showAi({ push: false });
+    return;
+  }
   if (url.pathname === "/clip") {
     startInput.value = fromCameraTime(url.searchParams.get("start"));
     endInput.value = fromCameraTime(url.searchParams.get("end"));
@@ -4146,6 +4591,11 @@ cameraForm.addEventListener("submit", async (event) => {
 clipBtn.addEventListener("click", (event) => {
   event.preventDefault();
   showClipForm();
+});
+
+aiBtn.addEventListener("click", (event) => {
+  event.preventDefault();
+  showAi();
 });
 
 facesBtn.addEventListener("click", (event) => {

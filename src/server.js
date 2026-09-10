@@ -42,6 +42,9 @@ import {
   modifyFace,
   removeFace,
 } from "../utils/addFace.js";
+import { saveAreaZone, clearAreaZone } from "../utils/areaIntrusion.js";
+import { saveLineCross, clearLineCross } from "../utils/lineCross.js";
+import { getAiState, setAiModels } from "../utils/ai.js";
 
 const PORT = 3000;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -324,6 +327,30 @@ app.get("/api/snaps/:uuid", asyncRoute(async (req, res) => {
   res.type("jpeg").send(jpeg);
 }));
 
+app.get("/api/ai", asyncRoute(async (req, res) => {
+  res.json(await getAiState(req.query.cam));
+}));
+
+app.post("/api/ai", asyncRoute(async (req, res) => {
+  res.json(await saveAreaZone(req.body ?? {}));
+}));
+
+app.delete("/api/ai", asyncRoute(async (req, res) => {
+  res.json(await clearAreaZone(req.query.cam || req.body?.cam));
+}));
+
+app.post("/api/ai/models", asyncRoute(async (req, res) => {
+  res.json({ models: await setAiModels(req.body ?? {}) });
+}));
+
+app.post("/api/ai/line", asyncRoute(async (req, res) => {
+  res.json(await saveLineCross(req.body ?? {}));
+}));
+
+app.delete("/api/ai/line", asyncRoute(async (req, res) => {
+  res.json(await clearLineCross(req.query.cam || req.body?.cam));
+}));
+
 app.get("/api/groups", asyncRoute(async (_req, res) => {
   res.json(await listGroups());
 }));
@@ -377,7 +404,7 @@ app.use("/clips", express.static(clipsDir));
 app.get("/", (_req, res) => res.redirect("/live"));
 app.use(express.static(publicDir));
 
-app.get(["/live", "/clip", "/faces", "/groups"], (_req, res) => {
+app.get(["/live", "/clip", "/faces", "/groups", "/ai"], (_req, res) => {
   res.sendFile(path.join(publicDir, "index.html"));
 });
 
