@@ -54,7 +54,7 @@ function pipeFfmpeg(req, res, headers, args, { retries = 0, gapMs = 400 } = {}) 
   start(0);
 }
 
-function liveVideoArgs(rtspUrl) {
+export function liveVideoArgs(rtspUrl) {
   return [
     "-hide_banner",
     "-loglevel", "fatal",
@@ -74,7 +74,7 @@ function liveVideoArgs(rtspUrl) {
   ];
 }
 
-function clipVideoArgs(rtspUrl, duration) {
+export function clipVideoArgs(rtspUrl, duration) {
   const args = [
     "-hide_banner",
     "-loglevel", "fatal",
@@ -97,7 +97,7 @@ function clipVideoArgs(rtspUrl, duration) {
   return args;
 }
 
-function audioArgs(rtspUrl, { duration, sampleRate = 48000 } = {}) {
+export function audioArgs(rtspUrl, { duration, sampleRate = 48000 } = {}) {
   const args = [
     "-hide_banner",
     "-loglevel", "fatal",
