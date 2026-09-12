@@ -603,6 +603,7 @@ function makePtzPanel(cam, tile) {
   zoomAxis.slider.addEventListener("change", () => {
     run(() => ptzPost(cam.id, "zoom", {
       zoom: Number(zoomAxis.slider.value),
+      focus: Number(focusAxis.slider.value),
       zoomStep: Number(zoomAxis.stepSelect.value) || 1,
       focusStep: Number(focusAxis.stepSelect.value) || 1,
     }));
@@ -610,6 +611,7 @@ function makePtzPanel(cam, tile) {
   focusAxis.slider.addEventListener("change", () => {
     run(() => ptzPost(cam.id, "focus", {
       focus: Number(focusAxis.slider.value),
+      zoom: Number(zoomAxis.slider.value),
       zoomStep: Number(zoomAxis.stepSelect.value) || 1,
       focusStep: Number(focusAxis.stepSelect.value) || 1,
     }));

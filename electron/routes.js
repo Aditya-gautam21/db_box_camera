@@ -309,6 +309,7 @@ async function handleApi(request, url, pathname) {
       zoomStep: body.zoomStep,
       focusStep: body.focusStep,
       speed: body.speed,
+      focus: body.focus,
     }));
   }
   m = p("/api/cameras/:id/ptz/focus");
@@ -318,6 +319,7 @@ async function handleApi(request, url, pathname) {
       zoomStep: body.zoomStep,
       focusStep: body.focusStep,
       speed: body.speed,
+      zoom: body.zoom,
     }));
   }
   m = p("/api/cameras/:id/ptz/autofocus");

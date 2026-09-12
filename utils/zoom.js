@@ -5,31 +5,21 @@ const PTZ_GET = "/API/PreviewChannel/PTZ/Get";
 const PTZ_RANGE = "/API/PreviewChannel/PTZ/Range";
 const PTZ_CONTROL = "/API/PreviewChannel/PTZ/Control";
 const PTZ_PROGRESS = "/API/PreviewChannel/PTZ/Control/Progress";
-const HEARTBEAT = "/API/Login/Heartbeat";
-
-const HEARTBEAT_MS = 4000;
 const DEFAULT_SPEED = 50;
 const DEFAULT_CHANNEL = "CH1";
+
+const lastPos = new Map();
+
+function rememberPos(camId, pos) {
+  if (pos) lastPos.set(camId, pos);
+  return pos;
+}
 
 function assertOk(res) {
   if (res?.result === "failed" || res?.error_code) {
     throw new Error(res.reason || res.error_code || "ptz request failed");
   }
   return res;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function startHeartbeat(session) {
-  const beat = () => {
-    const post = session.postNow || session.post;
-    post(HEARTBEAT, {}).catch(() => {});
-  };
-  beat();
-  const timer = setInterval(beat, HEARTBEAT_MS);
-  return () => clearInterval(timer);
 }
 
 function intItems(field, fallback = [1, 5, 20]) {
@@ -105,103 +95,76 @@ async function requirePtzCamera(camId) {
 
 export async function getPtzPosition(camId, channel = DEFAULT_CHANNEL) {
   const session = await getSession(camId);
-  const res = assertOk(await session.post(PTZ_GET, { channel }));
-  return {
+  const post = session.postNow || session.post;
+  const res = assertOk(await post(PTZ_GET, { channel }));
+  return rememberPos(camId, {
     channel: res.data?.channel ?? channel,
     zoom_slider: res.data?.zoom_slider,
     focus_slider: res.data?.focus_slider,
-  };
+  });
 }
 
 export async function getPtzProgress(camId, channel = DEFAULT_CHANNEL) {
   const session = await getSession(camId);
-  const res = assertOk(await session.post(PTZ_PROGRESS, { channel }));
+  const post = session.postNow || session.post;
+  const res = assertOk(await post(PTZ_PROGRESS, { channel }));
   return {
     channel: res.data?.channel ?? channel,
     isctl: res.data?.isctl ?? false,
   };
 }
 
-async function waitForZoom(camId, channel, targetZoom, { pollMs = 750, timeoutMs = 16000 } = {}) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    await sleep(pollMs);
-    const pos = await getPtzPosition(camId, channel);
-    if (pos.zoom_slider === targetZoom) return pos;
-  }
-  return getPtzPosition(camId, channel);
+async function knownPos(camId, channel) {
+  return lastPos.get(camId) || getPtzPosition(camId, channel);
 }
 
-async function waitForFocusChange(camId, channel, startFocus, { pollMs = 750, timeoutMs = 12000 } = {}) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    await sleep(pollMs);
-    const pos = await getPtzPosition(camId, channel);
-    if (pos.focus_slider !== startFocus) return pos;
-  }
-  return getPtzPosition(camId, channel);
-}
-
-async function withPtzSession(camId, channel, run) {
+async function sendPtz(camId, channel, body, pos) {
   const session = await getSession(camId);
-  const stopHeartbeat = startHeartbeat(session);
-  try {
-    return await run(session);
-  } finally {
-    stopHeartbeat();
-  }
+  const post = session.postNow || session.post;
+  assertOk(await post(PTZ_CONTROL, { channel, speed: DEFAULT_SPEED, ...body }));
+  return rememberPos(camId, { channel, ...pos });
 }
 
 export async function setZoom(camId, zoom, {
   focusStep = 1,
   zoomStep = 1,
   speed = DEFAULT_SPEED,
-  pollMs = 750,
-  timeoutMs = 16000,
+  focus,
 } = {}) {
   const { channel: ch } = await requirePtzCamera(camId);
   const target = Number(zoom);
   if (!Number.isFinite(target)) throw new Error("zoom required");
-
-  return withPtzSession(camId, ch, async (session) => {
-    const current = await getPtzPosition(camId, ch);
-    assertOk(await session.post(PTZ_CONTROL, {
-      channel: ch,
-      cmd: "Ptz_Zoom_Position",
-      focus_slider: current.focus_slider,
-      focus_step: focusStep,
-      speed,
-      zoom_slider: target,
-      zoom_step: zoomStep,
-    }));
-    return waitForZoom(camId, ch, target, { pollMs, timeoutMs });
-  });
+  const current = await knownPos(camId, ch);
+  const focusAt = Number.isFinite(Number(focus)) ? Number(focus) : current.focus_slider;
+  return sendPtz(camId, ch, {
+    cmd: "Ptz_Zoom_Position",
+    focus_slider: focusAt,
+    focus_step: focusStep,
+    speed,
+    zoom_slider: target,
+    zoom_step: zoomStep,
+  }, { zoom_slider: target, focus_slider: focusAt });
 }
 
 export async function setFocus(camId, focus, {
   focusStep = 1,
   zoomStep = 1,
   speed = DEFAULT_SPEED,
-  pollMs = 750,
-  timeoutMs = 12000,
+  zoom,
 } = {}) {
   const { channel: ch } = await requirePtzCamera(camId);
   const target = Number(focus);
   if (!Number.isFinite(target)) throw new Error("focus required");
-
-  return withPtzSession(camId, ch, async (session) => {
-    const current = await getPtzPosition(camId, ch);
-    assertOk(await session.post(PTZ_CONTROL, {
-      channel: ch,
-      cmd: "Ptz_Focus_Position",
-      focus_slider: target,
-      focus_step: focusStep,
-      speed,
-      zoom_slider: current.zoom_slider,
-      zoom_step: zoomStep,
-    }));
-    return waitForFocusChange(camId, ch, current.focus_slider, { pollMs, timeoutMs });
-  });
+  const current = await knownPos(camId, ch);
+  const zoomAt = Number.isFinite(Number(zoom)) ? Number(zoom) : current.zoom_slider;
+  return sendPtz(camId, ch, {
+    cmd: "Ptz_Focus_Position",
+    focus_slider: target,
+    focus_step: focusStep,
+    speed,
+    zoom_slider: zoomAt,
+    zoom_step: zoomStep,
+  }, { zoom_slider: zoomAt, focus_slider: target });
 }
 
 export async function autoFocus(camId, {
@@ -209,58 +172,35 @@ export async function autoFocus(camId, {
   zoomStep = 1,
   speed = DEFAULT_SPEED,
   state = "",
-  pollMs = 750,
-  timeoutMs = 12000,
 } = {}) {
   const { channel: ch } = await requirePtzCamera(camId);
-
-  return withPtzSession(camId, ch, async (session) => {
-    const current = await getPtzPosition(camId, ch);
-    assertOk(await session.post(PTZ_CONTROL, {
-      channel: ch,
-      cmd: "Ptz_Btn_AutoFocus",
-      focus_slider: current.focus_slider,
-      focus_step: focusStep,
-      speed,
-      state,
-      zoom_slider: current.zoom_slider,
-      zoom_step: zoomStep,
-    }));
-    return waitForFocusChange(camId, ch, current.focus_slider, { pollMs, timeoutMs });
-  });
+  const current = await knownPos(camId, ch);
+  return sendPtz(camId, ch, {
+    cmd: "Ptz_Btn_AutoFocus",
+    focus_slider: current.focus_slider,
+    focus_step: focusStep,
+    speed,
+    state,
+    zoom_slider: current.zoom_slider,
+    zoom_step: zoomStep,
+  }, current);
 }
 
 export async function restorePtz(camId, {
   focusStep = 1,
   zoomStep = 1,
   speed = DEFAULT_SPEED,
-  pollMs = 750,
-  timeoutMs = 16000,
 } = {}) {
   const { channel: ch } = await requirePtzCamera(camId);
-
-  return withPtzSession(camId, ch, async (session) => {
-    const current = await getPtzPosition(camId, ch);
-    assertOk(await session.post(PTZ_CONTROL, {
-      channel: ch,
-      cmd: "Ptz_Btn_Default",
-      focus_slider: current.focus_slider,
-      focus_step: focusStep,
-      speed,
-      zoom_slider: current.zoom_slider,
-      zoom_step: zoomStep,
-    }));
-    const deadline = Date.now() + timeoutMs;
-    let pos = current;
-    while (Date.now() < deadline) {
-      await sleep(pollMs);
-      pos = await getPtzPosition(camId, ch);
-      if (pos.zoom_slider !== current.zoom_slider || pos.focus_slider !== current.focus_slider) {
-        return pos;
-      }
-    }
-    return pos;
-  });
+  const current = await knownPos(camId, ch);
+  return sendPtz(camId, ch, {
+    cmd: "Ptz_Btn_Default",
+    focus_slider: current.focus_slider,
+    focus_step: focusStep,
+    speed,
+    zoom_slider: current.zoom_slider,
+    zoom_step: zoomStep,
+  }, current);
 }
 
 export async function refreshPtz(camId, {
@@ -269,20 +209,16 @@ export async function refreshPtz(camId, {
   speed = DEFAULT_SPEED,
 } = {}) {
   const { channel: ch } = await requirePtzCamera(camId);
-
-  return withPtzSession(camId, ch, async (session) => {
-    const current = await getPtzPosition(camId, ch);
-    assertOk(await session.post(PTZ_CONTROL, {
-      channel: ch,
-      cmd: "Ptz_Btn_Refresh",
-      focus_slider: current.focus_slider,
-      focus_step: focusStep,
-      speed,
-      zoom_slider: current.zoom_slider,
-      zoom_step: zoomStep,
-    }));
-    return getPtzPosition(camId, ch);
-  });
+  const current = await knownPos(camId, ch);
+  await sendPtz(camId, ch, {
+    cmd: "Ptz_Btn_Refresh",
+    focus_slider: current.focus_slider,
+    focus_step: focusStep,
+    speed,
+    zoom_slider: current.zoom_slider,
+    zoom_step: zoomStep,
+  }, current);
+  return getPtzPosition(camId, ch);
 }
 
 export async function getPtzState(camId) {
