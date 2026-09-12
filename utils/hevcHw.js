@@ -59,40 +59,6 @@ async function vaapiOpens(device) {
   return !/failed|error/i.test(err);
 }
 
-function verifyArgs(hw, rtspUrl) {
-  const head = [
-    "-loglevel", "error",
-    "-rtsp_transport", "tcp",
-    "-timeout", "8000000",
-  ];
-  const tail = ["-an", "-frames:v", "1", "-f", "null", "-"];
-  if (hw.kind === "vaapi") {
-    return [
-      ...head,
-      "-hwaccel", "vaapi",
-      "-hwaccel_device", hw.device,
-      "-hwaccel_output_format", "vaapi",
-      "-i", rtspUrl,
-      "-vf", "hwdownload,format=nv12",
-      ...tail,
-    ];
-  }
-  if (hw.kind === "v4l2m2m") {
-    return [...head, "-c:v", "hevc_v4l2m2m", "-i", rtspUrl, ...tail];
-  }
-  if (hw.kind === "cuda") {
-    return [
-      ...head,
-      "-hwaccel", "cuda",
-      "-hwaccel_output_format", "cuda",
-      "-i", rtspUrl,
-      "-vf", "hwdownload,format=nv12",
-      ...tail,
-    ];
-  }
-  return [...head, "-i", rtspUrl, ...tail];
-}
-
 async function candidates() {
   const [acc, dec] = await Promise.all([
     ffmpegText(["-hwaccels"]),
@@ -102,42 +68,40 @@ async function candidates() {
   if (/hevc_v4l2m2m/.test(dec)) list.push({ kind: "v4l2m2m" });
   if (/\bvaapi\b/.test(acc)) {
     for (const device of RENDER_NODES) {
-      if (await readable(device) && await vaapiOpens(device)) list.push({ kind: "vaapi", device });
+      if (await readable(device) && await vaapiOpens(device)) {
+        list.push({ kind: "vaapi", device });
+        break;
+      }
     }
   }
-  if (/\bcuda\b/.test(acc) && /hevc_cuvid/.test(dec)) list.push({ kind: "cuda" });
+  if (!list.length && /\bcuda\b/.test(acc) && /hevc_cuvid/.test(dec)) list.push({ kind: "cuda" });
   return list;
 }
 
-async function verify(hw, rtspUrl) {
-  const { ok } = await ffmpegCapture(verifyArgs(hw, rtspUrl), 8000);
-  return ok;
-}
-
-async function probe(rtspUrl) {
-  for (const hw of await candidates()) {
-    try {
-      if (await verify(hw, rtspUrl)) {
-        const label = hw.device ? `${hw.kind}:${hw.device}` : hw.kind;
-        console.log(`live decode: hevc hardware (${label})`);
-        return { hw };
-      }
-    } catch {
-      /* try next backend */
-    }
+async function probe() {
+  const list = await candidates();
+  const hw = list[0] || null;
+  if (hw) {
+    const label = hw.device ? `${hw.kind}:${hw.device}` : hw.kind;
+    console.log(`live decode: hevc hardware (${label})`);
+  } else {
+    console.log("live decode: software (hevc/h264)");
   }
-  console.log("live decode: software (hevc/h264)");
-  return { hw: null };
+  return { hw };
 }
 
-export async function liveDecodeMode(rtspUrl) {
+export async function liveDecodeMode() {
   if (cached) return cached;
-  if (!inflight) inflight = probe(rtspUrl).then((mode) => {
+  if (!inflight) inflight = probe().then((mode) => {
     cached = mode;
     inflight = null;
     return mode;
   });
   return inflight;
+}
+
+export function startLiveDecodeProbe() {
+  liveDecodeMode();
 }
 
 export function liveHwArgs(hw) {

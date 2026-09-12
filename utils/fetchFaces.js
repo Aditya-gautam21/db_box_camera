@@ -84,10 +84,25 @@ function cacheJpeg(key, buf) {
   jpegCache.delete(jpegCache.keys().next().value);
 }
 
+function faceJpegB64(b64) {
+  return String(b64 || "").replace(/^data:image\/\w+;base64,/, "");
+}
+
 function rememberFaceJpeg(camId, uuid, b64) {
   if (!uuid || !b64) return;
-  const raw = String(b64).replace(/^data:image\/\w+;base64,/, "");
-  cacheJpeg(`${camId}:${uuid}`, Buffer.from(raw, "base64"));
+  const raw = faceJpegB64(b64);
+  if (!raw) return;
+  const buf = Buffer.from(raw, "base64");
+  cacheJpeg(`${camId}:${uuid}`, buf);
+  cacheJpeg(uuid, buf);
+}
+
+function cachedJpeg(uuid, camId) {
+  if (camId) {
+    const hit = jpegCache.get(`${camId}:${uuid}`);
+    if (hit) return hit;
+  }
+  return jpegCache.get(uuid) || null;
 }
 
 function groupIdFromRow(row) {
@@ -317,6 +332,7 @@ export async function listSnappedFaces({
       return {
         uuid,
         filename: uuid,
+        image: row.FaceImage ? `data:image/jpeg;base64,${faceJpegB64(row.FaceImage)}` : "",
         url: `/api/snaps/${encodeURIComponent(uuid)}?cam=${encodeURIComponent(camId)}`,
         name: nameByUuid.get(uuid) || (wantNames ? "Stranger" : "unknown"),
         start: startTime,
@@ -329,8 +345,7 @@ export async function listSnappedFaces({
 export async function getSnapJpeg(uuid, cam) {
   if (!uuid) throw new Error("uuid required");
   const session = await getSession(cam);
-  const cacheKey = `${session.id}:${uuid}`;
-  const hit = jpegCache.get(cacheKey);
+  const hit = cachedJpeg(uuid, session.id);
   if (hit) return hit;
   const res = await session.post("/API/AI/SnapedFaces/GetById", {
     MsgId: "",
@@ -342,8 +357,12 @@ export async function getSnapJpeg(uuid, cam) {
     WithFeature: 0,
   });
   const face = res.data?.SnapedFaceInfo?.[0];
-  if (!face?.FaceImage) throw new Error("no FaceImage");
-  const buf = Buffer.from(face.FaceImage, "base64");
-  cacheJpeg(cacheKey, buf);
+  if (!face?.FaceImage) {
+    const err = new Error("no FaceImage");
+    err.status = 404;
+    throw err;
+  }
+  const buf = Buffer.from(faceJpegB64(face.FaceImage), "base64");
+  rememberFaceJpeg(session.id, uuid, face.FaceImage);
   return buf;
 }

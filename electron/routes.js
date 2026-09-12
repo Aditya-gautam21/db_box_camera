@@ -223,7 +223,7 @@ async function handleMedia(request, url, pathname) {
     const cam = await getCamera(streamCam.cam);
     if (!cam) return text("unknown camera", 404);
     const rtsp = getRtspUrl(cam, 0);
-    const { hw } = await liveDecodeMode(rtsp);
+    const { hw } = await liveDecodeMode();
     return ffmpegResponse(liveVideoArgs(rtsp, hw), MJPEG, request);
   }
   const audioCam = match(pathname, "/stream-audio/:cam");
@@ -381,8 +381,13 @@ async function handleApi(request, url, pathname) {
   }
   m = p("/api/snaps/:uuid");
   if (m && method === "GET") {
-    const jpeg = await getSnapJpeg(m.uuid, url.searchParams.get("cam"));
-    return bytes(jpeg, "image/jpeg", { "cache-control": "public, max-age=86400, immutable" });
+    try {
+      const jpeg = await getSnapJpeg(m.uuid, url.searchParams.get("cam"));
+      return bytes(jpeg, "image/jpeg", { "cache-control": "public, max-age=86400, immutable" });
+    } catch (err) {
+      if (err.message === "no FaceImage") return text("not found", 404);
+      throw err;
+    }
   }
 
   if (pathname === "/api/ai") {

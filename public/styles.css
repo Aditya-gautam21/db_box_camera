@@ -4,14 +4,14 @@
   --bg-soft: #0a0a0a;
   --panel: #111;
   --field: #0a0a0a;
-  --line: rgba(58, 212, 255, 0.18);
+  --line: rgba(30, 77, 140, 0.45);
   --text: #f3f6f8;
   --muted: #8b959c;
-  --accent: #3ad4ff;
+  --accent: #1e4d8c;
   --accent-2: #f0c93a;
-  --accent-soft: rgba(58, 212, 255, 0.16);
-  --ink: #000;
-  --live: #3ad4ff;
+  --accent-soft: rgba(30, 77, 140, 0.28);
+  --ink: #f3f6f8;
+  --live: #1e4d8c;
   --alert: #ff5b8a;
   --shadow: 0 20px 50px rgba(0, 0, 0, 0.7);
   --sans: "Outfit", "Segoe UI", system-ui, sans-serif;
@@ -24,7 +24,7 @@
 
 html {
   touch-action: manipulation;
-  -webkit-tap-highlight-color: rgba(58, 212, 255, 0.22);
+  -webkit-tap-highlight-color: rgba(30, 77, 140, 0.22);
 }
 
 html,
@@ -83,8 +83,8 @@ body::before {
   pointer-events: none;
   opacity: 0.35;
   background-image:
-    linear-gradient(rgba(58, 212, 255, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(58, 212, 255, 0.05) 1px, transparent 1px);
+    linear-gradient(rgba(30, 77, 140, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(30, 77, 140, 0.05) 1px, transparent 1px);
   background-size: 52px 52px;
   mask-image: radial-gradient(ellipse at 50% 40%, #000 35%, transparent 80%);
   z-index: 0;
@@ -125,7 +125,7 @@ header {
   border-radius: 14px;
   border: 1px solid var(--line);
   background: linear-gradient(180deg, #1a1a1a, #000);
-  box-shadow: inset 0 1px 0 rgba(58, 212, 255, 0.12);
+  box-shadow: inset 0 1px 0 rgba(30, 77, 140, 0.12);
 }
 
 .kicker {
@@ -163,7 +163,7 @@ header {
 
 .dot.on {
   background: var(--live);
-  box-shadow: 0 0 0 4px rgba(58, 212, 255, 0.2), 0 0 16px rgba(58, 212, 255, 0.7);
+  box-shadow: 0 0 0 4px rgba(30, 77, 140, 0.2), 0 0 16px rgba(30, 77, 140, 0.7);
 }
 
 nav {
@@ -196,7 +196,7 @@ nav a:active {
 nav a.active {
   color: var(--ink);
   background: var(--accent);
-  box-shadow: 0 0 18px rgba(58, 212, 255, 0.35);
+  box-shadow: 0 0 18px rgba(30, 77, 140, 0.35);
 }
 
 main {
@@ -1054,16 +1054,16 @@ button[type="button"].ptz-nudge:disabled {
 }
 
 .event-card.on {
-  background: rgba(58, 212, 255, 0.28);
+  background: rgba(30, 77, 140, 0.28);
 }
 
 .event-card.active {
   border-color: var(--accent);
-  background: rgba(58, 212, 255, 0.12);
+  background: rgba(30, 77, 140, 0.12);
 }
 
 .event-card.active.on {
-  background: rgba(58, 212, 255, 0.35);
+  background: rgba(30, 77, 140, 0.35);
 }
 
 .event-card-head {
@@ -1257,7 +1257,7 @@ input[type="checkbox"] {
 }
 
 input:focus {
-  border-color: rgba(58, 212, 255, 0.55);
+  border-color: rgba(30, 77, 140, 0.55);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
@@ -1977,7 +1977,7 @@ body[data-page="faces"] #raw-link {
 
 .snap-pick.selected {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(58, 212, 255, 0.35);
+  box-shadow: 0 0 0 2px rgba(30, 77, 140, 0.35);
 }
 
 .muted {
@@ -2079,7 +2079,7 @@ body[data-page="faces"] #raw-link {
 .face-card:hover,
 .face-card:active {
   transform: translateY(-3px);
-  border-color: rgba(58, 212, 255, 0.4);
+  border-color: rgba(30, 77, 140, 0.4);
 }
 
 .face-card img {
@@ -2113,7 +2113,7 @@ body[data-page="faces"] #raw-link {
 
 .face-card.selected {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(58, 212, 255, 0.35), var(--shadow);
+  box-shadow: 0 0 0 2px rgba(30, 77, 140, 0.35), var(--shadow);
 }
 
 @media (max-width: 1100px) {

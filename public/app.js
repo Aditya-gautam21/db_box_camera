@@ -1092,8 +1092,8 @@ function initEventStudio(tile, cam, ui) {
       if (!shape.points.length) return;
       const screen = shape.points.map(([x, y]) => m.toScreen(x, y));
       ctx.lineWidth = 2;
-      ctx.strokeStyle = index === state.selectedRule ? "#3ad4ff" : "#f5d24a";
-      ctx.fillStyle = "rgba(58, 212, 255, 0.12)";
+      ctx.strokeStyle = index === state.selectedRule ? "#1e4d8c" : "#f5d24a";
+      ctx.fillStyle = "rgba(30, 77, 140, 0.12)";
       ctx.beginPath();
       ctx.moveTo(screen[0][0], screen[0][1]);
       for (const [x, y] of screen.slice(1)) ctx.lineTo(x, y);
@@ -1133,7 +1133,7 @@ function initEventStudio(tile, cam, ui) {
       const width = Math.max(72, ctx.measureText(item.label).width + 16);
       ctx.fillStyle = "rgba(8, 8, 8, 0.7)";
       ctx.fillRect(x, y, width, 22);
-      ctx.strokeStyle = state.drag?.key === item.key ? "#3ad4ff" : "#e8e4dc";
+      ctx.strokeStyle = state.drag?.key === item.key ? "#1e4d8c" : "#e8e4dc";
       ctx.strokeRect(x, y, width, 22);
       ctx.fillStyle = "#fff";
       ctx.textAlign = "left";
@@ -1152,7 +1152,7 @@ function initEventStudio(tile, cam, ui) {
       if (points.length < 2) return;
       const screen = points.map(([x, y]) => m.toScreen(x, y));
       ctx.fillStyle = "rgba(12, 12, 12, 0.72)";
-      ctx.strokeStyle = index === state.selectedZone ? "#3ad4ff" : "#8a8680";
+      ctx.strokeStyle = index === state.selectedZone ? "#1e4d8c" : "#8a8680";
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(screen[0][0], screen[0][1]);
@@ -1179,7 +1179,7 @@ function initEventStudio(tile, cam, ui) {
       const h = Math.abs(b[1] - a[1]);
       ctx.fillStyle = "rgba(12, 12, 12, 0.55)";
       ctx.fillRect(x, y, w, h);
-      ctx.strokeStyle = "#3ad4ff";
+      ctx.strokeStyle = "#1e4d8c";
       ctx.strokeRect(x, y, w, h);
     }
   }
@@ -2520,7 +2520,7 @@ function makeLiveTile(cam) {
   const img = document.createElement("img");
   img.alt = label;
   img.decoding = "async";
-  img.src = `/stream/${encodeURIComponent(cam.id)}`;
+  img.dataset.stream = `/stream/${encodeURIComponent(cam.id)}`;
   const overlay = document.createElement("canvas");
   overlay.className = "event-overlay";
   stage.append(img, overlay);
@@ -2617,6 +2617,8 @@ function drawLiveWindows() {
   const frag = document.createDocumentFragment();
   for (const cam of pageCams) frag.append(makeLiveTile(cam));
   liveDash.replaceChildren(frag);
+  const imgs = liveDash.querySelectorAll(".live-stage > img");
+  for (const img of imgs) img.src = img.dataset.stream;
 }
 
 async function loadLiveDash({ goToLast = false } = {}) {
@@ -2974,7 +2976,7 @@ function drawAiOverlay() {
   if (!m) return;
   const [x1, y1] = m.toScreen(box[0][0], box[0][1]);
   const [x2, y2] = m.toScreen(box[1][0], box[1][1]);
-  ctx.strokeStyle = "#3ad4ff";
+  ctx.strokeStyle = "#1e4d8c";
   ctx.lineWidth = 2;
   if (kind === "line") {
     ctx.beginPath();
@@ -2988,13 +2990,13 @@ function drawAiOverlay() {
       ctx.fill();
       ctx.strokeStyle = "#111";
       ctx.stroke();
-      ctx.strokeStyle = "#3ad4ff";
+      ctx.strokeStyle = "#1e4d8c";
     }
     return;
   }
   const left = Math.min(x1, x2);
   const top = Math.min(y1, y2);
-  ctx.fillStyle = "rgba(58, 212, 255, 0.16)";
+  ctx.fillStyle = "rgba(30, 77, 140, 0.16)";
   ctx.fillRect(left, top, Math.abs(x2 - x1), Math.abs(y2 - y1));
   ctx.strokeRect(left, top, Math.abs(x2 - x1), Math.abs(y2 - y1));
 }
@@ -3887,7 +3889,7 @@ function makeSnapPick(face) {
   btn.dataset.uuid = uuid;
   if (snapSelected.has(uuid)) btn.classList.add("selected");
   const img = document.createElement("img");
-  img.src = face.url;
+  img.src = face.image || face.url;
   img.alt = snapCaption(face);
   img.decoding = "async";
   const cap = document.createElement("span");
@@ -4008,7 +4010,7 @@ function makeFaceCard(face) {
   btn.dataset.start = face.start || "";
   btn.dataset.filename = face.filename || "";
   const img = document.createElement("img");
-  img.src = face.url;
+  img.src = face.image || face.url;
   img.alt = face.name;
   img.decoding = "async";
   const cap = document.createElement("span");
