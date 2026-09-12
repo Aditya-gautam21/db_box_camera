@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { liveHwArgs, liveHwFilter } from "./hevcHw.js";
 
 const hubs = new Map();
 
@@ -14,10 +15,10 @@ const PCM_HEADERS = {
   Connection: "close",
 };
 
-/** Live encode — main stream in, browser MJPEG out. */
-const LIVE_VF = "fps=12,scale=960:-2,format=yuv420p";
+/** Main-stream live encode for the 4-tile page. */
+const LIVE_VF = "fps=12,scale=960:-2:flags=fast_bilinear";
 /** Clip encode. */
-const CLIP_VF = "fps=12,scale=960:-2,format=yuv420p";
+const CLIP_VF = "fps=12,scale=960:-2:flags=fast_bilinear";
 
 function pipeFfmpeg(req, res, headers, args, { retries = 0, gapMs = 400 } = {}) {
   res.set(headers);
@@ -54,22 +55,28 @@ function pipeFfmpeg(req, res, headers, args, { retries = 0, gapMs = 400 } = {}) 
   start(0);
 }
 
-export function liveVideoArgs(rtspUrl) {
+export function liveVideoArgs(rtspUrl, hw = null) {
   return [
     "-hide_banner",
     "-loglevel", "fatal",
     "-threads", "1",
-    "-rtsp_transport", "tcp",
-    "-fflags", "nobuffer",
+    "-filter_threads", "1",
+    "-fflags", "nobuffer+discardcorrupt+flush_packets",
     "-flags", "low_delay",
+    "-avioflags", "direct",
+    "-rtsp_transport", "tcp",
+    "-timeout", "5000000",
     "-probesize", "32768",
     "-analyzeduration", "0",
+    "-max_delay", "0",
+    ...liveHwArgs(hw),
     "-i", rtspUrl,
     "-an",
-    "-threads", "1",
-    "-vf", LIVE_VF,
+    "-sn",
+    "-vf", liveHwFilter(hw, LIVE_VF),
     "-f", "mpjpeg",
     "-q:v", "5",
+    "-flush_packets", "1",
     "pipe:1",
   ];
 }

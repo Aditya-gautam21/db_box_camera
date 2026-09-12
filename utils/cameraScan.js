@@ -3,7 +3,7 @@ import dgram from "node:dgram";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadCameras } from "./addCamera.js";
+import { loadCameras, normalizeHost } from "./addCamera.js";
 
 const WS_PORT = 3702;
 const WS_MULTICAST = "239.255.255.250";
@@ -107,7 +107,7 @@ function discoverFrom(local) {
 }
 
 export async function scanCameras() {
-  const added = new Set((await loadCameras()).map((cam) => String(cam.host || "").trim()));
+  const added = new Set((await loadCameras()).map((cam) => normalizeHost(cam.host)));
   const found = new Set();
   const sets = await Promise.all(lanIfaces().map(discoverFrom));
   for (const set of sets) {

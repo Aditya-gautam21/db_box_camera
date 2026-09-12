@@ -7,10 +7,10 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Outfit:wght@400;500;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600&family=Rajdhani:wght@500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/styles.css?v=20260909a" />
+    <link rel="stylesheet" href="/styles.css?v=20260912e" />
   </head>
   <body>
     <header>
@@ -337,10 +337,17 @@
           <span id="snaps-page">0 / 0</span>
           <button type="button" id="btn-snaps-next" class="icon-btn" aria-label="Next">›</button>
         </div>
-        <button type="button" id="btn-add-snaps">Add selected</button>
+        <div class="snaps-save-tools">
+          <label class="snaps-same-name">
+            <input type="checkbox" id="snaps-same-name" />
+            Apply same name to all selections
+          </label>
+          <input id="snaps-shared-name" type="text" placeholder="Name" autocomplete="off" hidden />
+          <button type="button" id="btn-add-snaps" disabled>Save</button>
+        </div>
       </div>
     </dialog>
     <input id="face-file" type="file" accept="image/*" multiple hidden />
-    <script src="/app.js?v=20260909a"></script>
+    <script src="/app.js?v=20260912d"></script>
   </body>
 </html>

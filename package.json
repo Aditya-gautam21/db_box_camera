@@ -4,13 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node --env-file=.env src/server.js"
+    "start": "electron .",
+    "dev": "electron ."
   },
   "dependencies": {
-    "express": "^5.1.0"
+    "electron": "^44.3.0"
   },
   "description": "",
-  "main": "index.js",
+  "main": "electron/main.js",
   "keywords": [],
   "author": "",
   "license": "ISC"

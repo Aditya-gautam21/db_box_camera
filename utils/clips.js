@@ -3,6 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { stream, audioStream } from "./livestream.js";
 import { getCamera } from "./addCamera.js";
+import { getSession } from "./cameraSession.js";
 
 export function playbackUri({ username, password, hostname, start, end }) {
   const q = new URLSearchParams({
@@ -26,6 +27,13 @@ function durationSeconds(start, end) {
 function stamp(value) {
   if (value instanceof Date) return value.toISOString().replace(/\.\d{3}Z$/, "Z");
   return String(value);
+}
+
+/** Honeywell /download.mp4 wants local wall time as yyyyMMddhhmmss. */
+function downloadStamp(value) {
+  const m = stamp(value).match(/(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/);
+  if (!m) throw Object.assign(new Error("invalid clip time"), { status: 400 });
+  return `${m[1]}${m[2]}${m[3]}${m[4]}${m[5]}${m[6]}`;
 }
 
 async function playbackUrl(camId, start, end) {
@@ -59,37 +67,32 @@ export async function saveClip({ cam, start, end, outDir }) {
   fs.mkdirSync(outDir, { recursive: true });
   const stampLabel = String(start).replaceAll(":", "").replaceAll("T", "-");
   const outFile = path.join(outDir, `clip-${stampLabel}.mp4`);
-  const clipUrl = await playbackUrl(cam, start, end);
   const seconds = durationSeconds(start, end);
-
-  return new Promise((resolve, reject) => {
-    const ff = spawn(
-      "ffmpeg",
-      [
-        "-y",
-        "-rtsp_transport", "tcp",
-        "-timeout", "3000000",
-        "-i", clipUrl,
-        "-t", String(seconds),
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-ac", "1",
-        "-ar", "8000",
-        "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
-        outFile,
-      ],
-      { stdio: ["ignore", "inherit", "inherit"] },
-    );
-
-    const watchdog = setTimeout(
-      () => ff.kill("SIGKILL"),
-      (seconds + 15) * 1000,
-    );
-
-    ff.on("exit", (code) => {
-      clearTimeout(watchdog);
-      if (code === 0) resolve(outFile);
-      else reject(new Error("ffmpeg " + code));
-    });
+  const session = await getSession(cam);
+  const qs = new URLSearchParams({
+    start_time: downloadStamp(start),
+    end_time: downloadStamp(end),
+    channel: "0",
+    record_type: "1",
+    stream_type: "0",
+    record_id: "0",
+    disk_event_id: "0",
+    download_type: "1",
   });
+  await session.download(`/download.mp4?${qs}`, outFile, Math.max(90, seconds + 30));
+  let size = 0;
+  try {
+    size = fs.statSync(outFile).size;
+  } catch {
+    size = 0;
+  }
+  if (size < 1024) {
+    try {
+      fs.unlinkSync(outFile);
+    } catch {
+      /* missing */
+    }
+    throw Object.assign(new Error("camera returned an empty clip"), { status: 502 });
+  }
+  return outFile;
 }

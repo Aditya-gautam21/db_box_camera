@@ -1,9 +1,69 @@
 import { readFile, writeFile } from "node:fs/promises";
+import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 
 const cameraFile = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "camera_info.json");
+const REACH_MS = 10_000;
+
+export function normalizeHost(host) {
+  let h = String(host || "").trim().toLowerCase();
+  h = h.replace(/^[a-z][a-z0-9+.-]*:\/\//, "");
+  h = h.split("/")[0];
+  h = h.replace(/^\[|\]$/g, "");
+  const colon = h.lastIndexOf(":");
+  if (colon > 0 && /^\d+$/.test(h.slice(colon + 1))) h = h.slice(0, colon);
+  return h;
+}
+
+function httpError(message, status) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
+function portOpen(host, port, ms, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve(false);
+    const sock = net.connect({ host, port });
+    let finished = false;
+    const done = (ok) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      sock.removeAllListeners();
+      sock.destroy();
+      resolve(ok);
+    };
+    const timer = setTimeout(() => done(false), ms);
+    signal?.addEventListener("abort", () => done(false), { once: true });
+    sock.once("connect", () => done(true));
+    sock.once("error", () => done(false));
+  });
+}
+
+export async function assertCameraReachable(host, timeoutMs = REACH_MS) {
+  const h = normalizeHost(host);
+  if (!h) throw httpError("No camera found", 404);
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    await Promise.any(
+      [554, 443].map((port) =>
+        portOpen(h, port, timeoutMs, ac.signal).then((open) => {
+          if (!open) throw new Error("closed");
+          return true;
+        }),
+      ),
+    );
+  } catch {
+    throw httpError("No camera found", 404);
+  } finally {
+    clearTimeout(timer);
+    ac.abort();
+  }
+}
 
 export async function loadCameras() {
   try {
@@ -34,10 +94,15 @@ export async function getCamera(id) {
 
 export async function addCamera(name, host, username, password, ptzInfo = {}) {
   const cameras = await loadCameras();
+  const hostNorm = normalizeHost(host);
+  if (cameras.some((cam) => normalizeHost(cam.host) === hostNorm)) {
+    throw httpError("Camera already added", 409);
+  }
+  await assertCameraReachable(hostNorm);
   const camera = {
     id: randomBytes(4).toString("hex"),
     name,
-    host,
+    host: hostNorm,
     username,
     password,
     ptz: ptzInfo.ptz === true,

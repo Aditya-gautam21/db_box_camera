@@ -184,6 +184,42 @@ export function createSession(cam) {
     }
   }
 
+  async function downloadNow(urlPath, outFile, maxTime, retries = 1) {
+    try {
+      if (!cookie) await login();
+      const { stdout } = await execFileAsync(curlBin, [
+        "-k",
+        "--tls-max", "1.2",
+        "--http1.1",
+        "-sS",
+        "--connect-timeout", "10",
+        "--max-time", String(maxTime),
+        "-H", `Cookie: session_443=${cookie}`,
+        "-H", `X-csrftoken: ${csrf}`,
+        "-X", "POST",
+        "-o", outFile,
+        "-w", "%{http_code} %{size_download}",
+        `https://${auth.host}${urlPath}`,
+      ]);
+      const [code, bytes] = String(stdout).trim().split(/\s+/);
+      if (code === "401" || code === "403") throw new Error("no_login");
+      if (code !== "200") {
+        throw Object.assign(new Error(`clip download failed (${code})`), { status: 502 });
+      }
+      if (Number(bytes) < 1024) {
+        throw Object.assign(new Error("camera returned an empty clip"), { status: 502 });
+      }
+    } catch (err) {
+      if (retries > 0 && (isDeadSession(err) || isTransient(err))) {
+        cookie = "";
+        csrf = "";
+        await delay(500);
+        return downloadNow(urlPath, outFile, maxTime, retries - 1);
+      }
+      throw cameraError(auth.host, err);
+    }
+  }
+
   let queue = Promise.resolve();
   function post(apiPath, data, retries = 1) {
     const run = () => postNow(apiPath, data, retries);
@@ -192,7 +228,14 @@ export function createSession(cam) {
     return next;
   }
 
-  return { id: auth.id, login, post, postNow };
+  function download(urlPath, outFile, maxTime = 120) {
+    const run = () => downloadNow(urlPath, outFile, maxTime);
+    const next = queue.then(run, run);
+    queue = next.then(() => {}, () => {});
+    return next;
+  }
+
+  return { id: auth.id, login, post, postNow, download };
 }
 
 const sessions = new Map();

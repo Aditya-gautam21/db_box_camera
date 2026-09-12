@@ -44,6 +44,9 @@ const editFaceEmpty = document.getElementById("edit-face-empty");
 const editFacePage = document.getElementById("edit-face-page");
 const modalSnapsGrid = document.getElementById("modal-snaps-grid");
 const modalSnapsEmpty = document.getElementById("modal-snaps-empty");
+const snapsSameName = document.getElementById("snaps-same-name");
+const snapsSharedName = document.getElementById("snaps-shared-name");
+const btnAddSnaps = document.getElementById("btn-add-snaps");
 const btnCloseModal = document.getElementById("btn-close-modal");
 const faceFields = {
   name: document.getElementById("edit-face-name"),
@@ -94,8 +97,9 @@ let faceIndex = 0;
 let faceDirty = false;
 let snapPage = 0;
 let snapTotal = 0;
-const SNAP_PAGE_SIZE = 12;
+let snapPageSize = 24;
 let snapFetchId = 0;
+let snapResizeTimer;
 let facesPageSize = 12;
 let facesPage = 0;
 let facesTotal = 0;
@@ -243,10 +247,9 @@ function setTransport(kind) {
   if (kind !== "clip") stopTick();
 }
 
-function playFeed(videoUrl, audioUrl) {
+function playFeed(videoUrl) {
   stopAudio();
   view.src = videoUrl;
-  if (audioUrl) startPcmAudio(audioUrl);
 }
 
 function stopView() {
@@ -264,15 +267,6 @@ function stopView() {
   playback = null;
   onPlaybackEnded = null;
   setTransport(null);
-}
-
-function startLiveFeed(cam = "eng") {
-  clearTimeout(endTimer);
-  playback = { kind: "live", paused: false, cam };
-  onPlaybackEnded = null;
-  setTransport("live");
-  setPausedUi(false);
-  playFeed(`/stream/${cam}`, `/stream-audio/${cam}`);
 }
 
 function stopLiveDash() {
@@ -303,6 +297,21 @@ function openLiveTile(tile) {
   enter?.call(tile);
 }
 
+function liveTileImg(tile) {
+  return tile.querySelector(".live-stage > img");
+}
+
+function pauseLiveTileStream(tile, pause) {
+  const img = liveTileImg(tile);
+  if (!img || !tile.dataset.cam) return;
+  const src = `/stream/${encodeURIComponent(tile.dataset.cam)}`;
+  if (pause) {
+    img.removeAttribute("src");
+    return;
+  }
+  if (img.getAttribute("src") !== src) img.src = src;
+}
+
 function onLiveTileFullscreen() {
   const tile = syncLiveTileFs();
   if (!tile) {
@@ -311,9 +320,13 @@ function onLiveTileFullscreen() {
       el.querySelector(".live-tile-settings")?.classList.remove("active");
       el.querySelector(".live-tile-settings")?.setAttribute("aria-pressed", "false");
       el._closeEvents?.();
+      pauseLiveTileStream(el, false);
     }
     if (document.body.dataset.page === "live") stopAudio();
     return;
+  }
+  for (const el of liveDash.querySelectorAll(".live-tile")) {
+    pauseLiveTileStream(el, el !== tile);
   }
   const cam = tile.dataset.cam;
   const label = tile.dataset.label || cam;
@@ -1046,6 +1059,7 @@ function initEventStudio(tile, cam, ui) {
   }
 
   function drawOverlay() {
+    if (!tile.classList.contains("settings-open")) return;
     const { canvas, img } = ui;
     const ctx = canvas.getContext("2d");
     const dpr = window.devicePixelRatio || 1;
@@ -1078,8 +1092,8 @@ function initEventStudio(tile, cam, ui) {
       if (!shape.points.length) return;
       const screen = shape.points.map(([x, y]) => m.toScreen(x, y));
       ctx.lineWidth = 2;
-      ctx.strokeStyle = index === state.selectedRule ? "#e3a45a" : "#f5d24a";
-      ctx.fillStyle = "rgba(227, 164, 90, 0.12)";
+      ctx.strokeStyle = index === state.selectedRule ? "#3ad4ff" : "#f5d24a";
+      ctx.fillStyle = "rgba(58, 212, 255, 0.12)";
       ctx.beginPath();
       ctx.moveTo(screen[0][0], screen[0][1]);
       for (const [x, y] of screen.slice(1)) ctx.lineTo(x, y);
@@ -1119,7 +1133,7 @@ function initEventStudio(tile, cam, ui) {
       const width = Math.max(72, ctx.measureText(item.label).width + 16);
       ctx.fillStyle = "rgba(8, 8, 8, 0.7)";
       ctx.fillRect(x, y, width, 22);
-      ctx.strokeStyle = state.drag?.key === item.key ? "#e3a45a" : "#e8e4dc";
+      ctx.strokeStyle = state.drag?.key === item.key ? "#3ad4ff" : "#e8e4dc";
       ctx.strokeRect(x, y, width, 22);
       ctx.fillStyle = "#fff";
       ctx.textAlign = "left";
@@ -1138,7 +1152,7 @@ function initEventStudio(tile, cam, ui) {
       if (points.length < 2) return;
       const screen = points.map(([x, y]) => m.toScreen(x, y));
       ctx.fillStyle = "rgba(12, 12, 12, 0.72)";
-      ctx.strokeStyle = index === state.selectedZone ? "#e3a45a" : "#8a8680";
+      ctx.strokeStyle = index === state.selectedZone ? "#3ad4ff" : "#8a8680";
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(screen[0][0], screen[0][1]);
@@ -1165,7 +1179,7 @@ function initEventStudio(tile, cam, ui) {
       const h = Math.abs(b[1] - a[1]);
       ctx.fillStyle = "rgba(12, 12, 12, 0.55)";
       ctx.fillRect(x, y, w, h);
-      ctx.strokeStyle = "#e3a45a";
+      ctx.strokeStyle = "#3ad4ff";
       ctx.strokeRect(x, y, w, h);
     }
   }
@@ -2505,6 +2519,7 @@ function makeLiveTile(cam) {
   stage.className = "live-stage";
   const img = document.createElement("img");
   img.alt = label;
+  img.decoding = "async";
   img.src = `/stream/${encodeURIComponent(cam.id)}`;
   const overlay = document.createElement("canvas");
   overlay.className = "event-overlay";
@@ -2544,12 +2559,8 @@ function makeLiveTile(cam) {
     tile.classList.toggle("settings-open", open);
     settingsBtn.classList.toggle("active", open);
     settingsBtn.setAttribute("aria-pressed", open ? "true" : "false");
-    if (open) {
-      tile._openEvents?.();
-      requestAnimationFrame(() => tile._openEvents?.());
-    } else {
-      tile._closeEvents?.();
-    }
+    if (open) tile._openEvents?.();
+    else tile._closeEvents?.();
   });
   const removeBtn = document.createElement("button");
   removeBtn.type = "button";
@@ -2733,7 +2744,7 @@ function startClipFeed(rangeStart, rangeEnd, offsetMs = 0, cam) {
   window.setTimeout(() => {
     if (gen !== clipGen) return;
     view.addEventListener("load", clipFirstFrameHandler);
-    playFeed(feedUrl, null);
+    playFeed(feedUrl);
     clipAudioTimer = window.setTimeout(() => {
       if (gen !== clipGen || playback?.paused) return;
       startPcmAudio(audioUrl);
@@ -2764,10 +2775,6 @@ function pausePlayback() {
 
 function resumePlayback() {
   if (!playback || !playback.paused) return;
-  if (playback.kind === "live") {
-    startLiveFeed(playback.cam || "eng");
-    return;
-  }
   const pos = playback.offsetMs >= playback.durationMs ? 0 : playback.offsetMs;
   startClipFeed(playback.rangeStart, playback.rangeEnd, pos, playback.cam);
 }
@@ -2967,7 +2974,7 @@ function drawAiOverlay() {
   if (!m) return;
   const [x1, y1] = m.toScreen(box[0][0], box[0][1]);
   const [x2, y2] = m.toScreen(box[1][0], box[1][1]);
-  ctx.strokeStyle = "#e3a45a";
+  ctx.strokeStyle = "#3ad4ff";
   ctx.lineWidth = 2;
   if (kind === "line") {
     ctx.beginPath();
@@ -2981,13 +2988,13 @@ function drawAiOverlay() {
       ctx.fill();
       ctx.strokeStyle = "#111";
       ctx.stroke();
-      ctx.strokeStyle = "#e3a45a";
+      ctx.strokeStyle = "#3ad4ff";
     }
     return;
   }
   const left = Math.min(x1, x2);
   const top = Math.min(y1, y2);
-  ctx.fillStyle = "rgba(227, 164, 90, 0.16)";
+  ctx.fillStyle = "rgba(58, 212, 255, 0.16)";
   ctx.fillRect(left, top, Math.abs(x2 - x1), Math.abs(y2 - y1));
   ctx.strokeRect(left, top, Math.abs(x2 - x1), Math.abs(y2 - y1));
 }
@@ -3062,6 +3069,7 @@ async function toggleAiModel(id, on) {
 }
 
 function renderAiStats(state) {
+  const prevModels = JSON.stringify(aiModels);
   if (state) {
     if (state.models) aiModels = { ...aiModels, ...state.models };
     if (state.zone) {
@@ -3123,7 +3131,10 @@ function renderAiStats(state) {
     list.append(Object.assign(document.createElement("li"), { textContent: "No alarms yet" }));
   }
   syncAiTools();
-  renderAiTypes();
+  const typesRoot = document.getElementById("ai-types");
+  if (JSON.stringify(aiModels) !== prevModels || !typesRoot?.childElementCount) {
+    renderAiTypes();
+  }
   drawAiOverlay();
 }
 
@@ -3259,6 +3270,7 @@ async function startAiPage() {
   }
   clearInterval(aiPoll);
   aiPoll = setInterval(() => {
+    if (document.hidden) return;
     refreshAi().catch(() => {});
   }, 1000);
 }
@@ -3383,7 +3395,7 @@ function playClip({ push = true } = {}) {
 async function saveClipToDisk() {
   const range = clipRange();
   if (!range) return;
-  statusEl.textContent = "Saving clip… wait about as long as the clip lasts";
+  statusEl.textContent = "Saving clip…";
   const camQ = clipCamQuery();
   const url = `/save-clip?start=${encodeURIComponent(range.start)}&end=${encodeURIComponent(range.end)}${camQ}`;
   try {
@@ -3805,7 +3817,7 @@ async function stepFace(delta) {
   showCurrentFace();
 }
 
-async function addFacesToGroup(jobs) {
+async function addFacesToGroup(jobs, extra = {}) {
   const grpId = editingGrpId;
   if (!grpId) {
     statusEl.textContent = "Open a group to add photos";
@@ -3815,7 +3827,7 @@ async function addFacesToGroup(jobs) {
     statusEl.textContent = "Choose one or more photos";
     return;
   }
-  const fields = readFaceForm();
+  const fields = { ...readFaceForm(), ...extra };
   let ok = 0;
   let fail = 0;
   let lastId = null;
@@ -3854,6 +3866,13 @@ function selectedSnapUuids() {
   return [...snapSelected];
 }
 
+function syncSnapSaveUi() {
+  btnAddSnaps.disabled = snapSelected.size === 0;
+  snapsSharedName.hidden = !snapsSameName.checked;
+  snapsSharedName.disabled = !snapsSameName.checked;
+  updateSnapPager();
+}
+
 function snapCaption(face) {
   if (face.start) return fromCameraTime(face.start).replace("T", " ").slice(11, 19);
   if (face.name && face.name !== "unknown") return face.name;
@@ -3878,41 +3897,63 @@ function makeSnapPick(face) {
     btn.classList.toggle("selected");
     if (btn.classList.contains("selected")) snapSelected.add(uuid);
     else snapSelected.delete(uuid);
-    if (snapTotal) {
-      modalSnapsEmpty.textContent = `${snapSelected.size} selected · page ${snapPage + 1} of ${snapPageCount()}`;
-    }
+    syncSnapSaveUi();
   });
   return btn;
 }
 
 function snapPageCount() {
-  return Math.max(1, Math.ceil(snapTotal / SNAP_PAGE_SIZE) || 1);
+  return Math.max(1, Math.ceil(snapTotal / snapPageSize) || 1);
+}
+
+function syncSnapPageSize() {
+  const grid = modalSnapsGrid;
+  const body = grid.parentElement;
+  if (!body) return snapPageSize;
+  const cs = getComputedStyle(grid);
+  const min = parseFloat(cs.getPropertyValue("--snap-min")) || 96;
+  const gap = parseFloat(cs.columnGap || cs.gap) || 8;
+  const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+  const padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+  const w = Math.max(min, (grid.clientWidth || body.clientWidth) - padX);
+  const h = Math.max(min, body.clientHeight - padY - (modalSnapsEmpty.offsetHeight || 0));
+  const cols = Math.max(1, Math.floor((w + gap) / (min + gap)));
+  const tile = (w - gap * (cols - 1)) / cols;
+  const cap = 24;
+  const rows = Math.max(1, Math.floor((h + gap) / (tile + cap + gap)));
+  snapPageSize = Math.max(cols, cols * rows);
+  return snapPageSize;
+}
+
+function snapFacesUrl(page, limit) {
+  return `/api/faces?start=${page * limit}&end=${(page + 1) * limit}&offset=${page * limit}&limit=${limit}${camQuery(snapsCam)}${facesDateQuery()}`;
 }
 
 function updateSnapPager() {
   const pages = snapTotal ? snapPageCount() : 0;
   const snapsPageEl = document.getElementById("snaps-page");
-  snapsPageEl.textContent = `${pages ? snapPage + 1 : 0} / ${pages}`;
+  const sel = snapSelected.size ? ` · ${snapSelected.size} selected` : "";
+  snapsPageEl.textContent = `${pages ? snapPage + 1 : 0} / ${pages}${sel}`;
   document.getElementById("btn-snaps-prev").disabled = snapPage <= 0;
   document.getElementById("btn-snaps-next").disabled = !pages || snapPage >= pages - 1;
 }
 
 async function loadCapturedSnaps() {
   const reqId = ++snapFetchId;
+  const limit = syncSnapPageSize();
   if (!modalSnapsGrid.childElementCount) {
     modalSnapsEmpty.hidden = false;
     modalSnapsEmpty.textContent = "Loading snapshots…";
   }
   updateSnapPager();
   try {
-    const res = await fetch(
-      `/api/faces?start=${snapPage * SNAP_PAGE_SIZE}&end=${(snapPage + 1) * SNAP_PAGE_SIZE}&offset=${snapPage * SNAP_PAGE_SIZE}&limit=${SNAP_PAGE_SIZE}${camQuery(snapsCam)}${facesDateQuery()}`,
-    );
+    const res = await fetch(snapFacesUrl(snapPage, limit));
     const data = await res.json();
     if (reqId !== snapFetchId) return;
     const faces = Array.isArray(data) ? data : data.faces;
     snapTotal = Array.isArray(data) ? data.length : Number(data.total) || 0;
     if (!res.ok || !Array.isArray(faces)) {
+      modalSnapsEmpty.hidden = false;
       modalSnapsEmpty.textContent = data.error || "Could not load snapshots";
       return;
     }
@@ -3921,27 +3962,16 @@ async function loadCapturedSnaps() {
       modalSnapsEmpty.hidden = false;
       modalSnapsEmpty.textContent = "No captured snapshots yet";
       updateSnapPager();
+      syncSnapSaveUi();
       return;
     }
-    modalSnapsEmpty.textContent = `${snapSelected.size} selected · page ${snapPage + 1} of ${snapPageCount()}`;
+    modalSnapsEmpty.hidden = true;
+    if (syncSnapPageSize() !== limit) return loadCapturedSnaps();
     const frag = document.createDocumentFragment();
     for (const face of faces) frag.append(makeSnapPick(face));
     modalSnapsGrid.replaceChildren(frag);
     updateSnapPager();
-    const next = snapPage + 1;
-    const prev = snapPage - 1;
-    if (next < snapPageCount()) {
-      fetch(
-        `/api/faces?start=${next * SNAP_PAGE_SIZE}&end=${(next + 1) * SNAP_PAGE_SIZE}&offset=${next * SNAP_PAGE_SIZE}&limit=${SNAP_PAGE_SIZE}${camQuery(snapsCam)}${facesDateQuery()}`,
-        { cache: "no-store" },
-      ).catch(() => {});
-    }
-    if (prev >= 0) {
-      fetch(
-        `/api/faces?start=${prev * SNAP_PAGE_SIZE}&end=${(prev + 1) * SNAP_PAGE_SIZE}&offset=${prev * SNAP_PAGE_SIZE}&limit=${SNAP_PAGE_SIZE}${camQuery(snapsCam)}${facesDateQuery()}`,
-        { cache: "no-store" },
-      ).catch(() => {});
-    }
+    syncSnapSaveUi();
   } catch (err) {
     if (reqId !== snapFetchId) return;
     modalSnapsEmpty.hidden = false;
@@ -3966,6 +3996,7 @@ function stopFacesPoll() {
 function startFacesPoll() {
   stopFacesPoll();
   facesPoll = setInterval(() => {
+    if (document.hidden) return;
     refreshFaces().catch(() => {});
   }, 3000);
 }
@@ -4031,21 +4062,6 @@ function renderFaceCards(faces, selectedStart) {
     frag.append(card);
   }
   facesGrid.replaceChildren(frag);
-}
-
-function applyFaceNames(faces) {
-  const cards = [...facesGrid.querySelectorAll(".face-card")];
-  const byFile = new Map(cards.map((el) => [el.dataset.filename, el]));
-  for (const face of faces) {
-    const el = byFile.get(face.filename);
-    if (!el) continue;
-    const strong = el.querySelector(".face-cap strong");
-    if (strong && face.name && strong.textContent !== face.name) {
-      strong.textContent = face.name;
-      const img = el.querySelector("img");
-      if (img) img.alt = face.name;
-    }
-  }
 }
 
 async function showFaces({ push = true } = {}) {
@@ -4325,9 +4341,14 @@ document.getElementById("btn-import-capture").addEventListener("click", () => {
   importModal.close();
   snapPage = 0;
   snapSelected.clear();
+  snapsSameName.checked = false;
+  snapsSharedName.value = "";
+  syncSnapSaveUi();
   if (!snapsModal.open) snapsModal.showModal();
   fillCamSelect(snapsCam, facesCam.value || lastCamId)
-    .then(() => loadCapturedSnaps())
+    .then(() => {
+      requestAnimationFrame(() => loadCapturedSnaps());
+    })
     .catch((err) => {
       modalSnapsEmpty.hidden = false;
       modalSnapsEmpty.textContent = String(err.message || err);
@@ -4435,8 +4456,35 @@ snapsCam.addEventListener("change", () => {
   lastCamId = snapsCam.value;
   snapPage = 0;
   snapSelected.clear();
+  syncSnapSaveUi();
   loadCapturedSnaps();
 });
+
+snapsSameName.addEventListener("change", () => {
+  syncSnapSaveUi();
+  if (snapsSameName.checked) snapsSharedName.focus();
+});
+
+snapsSharedName.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  btnAddSnaps.click();
+});
+
+if (typeof ResizeObserver !== "undefined" && modalSnapsGrid.parentElement) {
+  new ResizeObserver(() => {
+    if (!snapsModal.open) return;
+    clearTimeout(snapResizeTimer);
+    snapResizeTimer = setTimeout(() => {
+      const first = snapPage * snapPageSize;
+      const prev = snapPageSize;
+      syncSnapPageSize();
+      if (snapPageSize === prev) return;
+      snapPage = Math.floor(first / snapPageSize);
+      loadCapturedSnaps();
+    }, 160);
+  }).observe(modalSnapsGrid.parentElement);
+}
 
 document.getElementById("btn-snaps-prev").addEventListener("click", () => {
   if (snapPage <= 0) return;
@@ -4451,11 +4499,27 @@ document.getElementById("btn-snaps-next").addEventListener("click", () => {
 
 document.getElementById("btn-add-snaps").addEventListener("click", async () => {
   const uuids = selectedSnapUuids();
+  if (!uuids.length) {
+    statusEl.textContent = "Choose one or more photos";
+    return;
+  }
+  const extra = { name: "" };
+  if (snapsSameName.checked) {
+    const name = snapsSharedName.value.trim();
+    if (!name) {
+      statusEl.textContent = "Enter a name for the selected photos";
+      snapsSharedName.hidden = false;
+      snapsSharedName.focus();
+      return;
+    }
+    extra.name = name;
+  }
   await addFacesToGroup(
     uuids.map((uuid) => ({
       label: uuid,
       body: async () => ({ uuid, cam: snapsCam.value }),
     })),
+    extra,
   );
   snapSelected.clear();
   snapsModal.close();
@@ -4566,12 +4630,15 @@ document.getElementById("btn-camera-cancel").addEventListener("click", () => {
 
 cameraForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const saveBtn = document.getElementById("btn-camera-save");
   const body = {
     name: document.getElementById("cam-name").value.trim(),
     host: document.getElementById("cam-host").value.trim(),
     username: document.getElementById("cam-user").value.trim(),
     password: document.getElementById("cam-pass").value,
   };
+  saveBtn.disabled = true;
+  camScanStatus.textContent = "Checking camera…";
   try {
     const res = await fetch("/api/cameras", {
       method: "POST",
@@ -4584,7 +4651,9 @@ cameraForm.addEventListener("submit", async (event) => {
     statusEl.textContent = data.ptz ? `Added ${data.name} · PTZ available` : `Added ${data.name}`;
     await loadLiveDash({ goToLast: true });
   } catch (err) {
-    statusEl.textContent = String(err.message || err);
+    camScanStatus.textContent = String(err.message || err);
+  } finally {
+    saveBtn.disabled = false;
   }
 });
 
