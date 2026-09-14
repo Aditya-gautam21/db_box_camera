@@ -75,10 +75,9 @@ async function candidates() {
     if (device) list.push({ kind: "drm", device });
     return list;
   }
-  if (/hevc_v4l2m2m/.test(dec)) list.push({ kind: "v4l2m2m" });
   if (/\bvaapi\b/.test(acc)) {
     for (const device of RENDER_NODES) {
-      if (await readable(device)) {
+      if (await readable(device) && await vaapiWorks(device)) {
         list.push({ kind: "vaapi", device });
         break;
       }
@@ -86,6 +85,20 @@ async function candidates() {
   }
   if (!list.length && /\bcuda\b/.test(acc) && /hevc_cuvid/.test(dec)) list.push({ kind: "cuda" });
   return list;
+}
+
+async function vaapiWorks(device) {
+  const { ok, err } = await ffmpegCapture([
+    "-init_hw_device", `vaapi=va:${device}`,
+    "-f", "lavfi",
+    "-i", "color=c=black:s=16x16:d=0.05",
+    "-f", "null",
+    "-",
+  ], 3500);
+  if (!ok || /vaInitialize failed|Failed to initialise VAAPI|No VA display/i.test(err)) {
+    return false;
+  }
+  return true;
 }
 
 async function probe() {
@@ -132,8 +145,11 @@ export function liveHwArgs(hw) {
 }
 
 export function liveHwFilter(hw) {
-  const fps = "fps=12";
-  if (hw?.kind === "vaapi") return `scale_vaapi=w=1280:h=-2,hwdownload,format=nv12,${fps}`;
-  if (hw?.kind === "cuda") return `scale_cuda=1280:-2,hwdownload,format=nv12,${fps}`;
-  return `${fps},scale=1280:-2:flags=fast_bilinear`;
+  const sw = "fps=12,scale=1280:-2:flags=fast_bilinear";
+  if (hw?.kind === "vaapi") return `scale_vaapi=w=1280:h=-2,hwdownload,format=nv12,fps=12`;
+  if (hw?.kind === "cuda") return `scale_cuda=1280:-2,hwdownload,format=nv12,fps=12`;
+  // DRM/V4L2 frames must leave the decoder pool before software filters.
+  // Holding them in fps/scale stalls mediabufs_poll_bs and blanks live.
+  if (hw?.kind === "drm" || hw?.kind === "v4l2m2m") return `hwdownload,format=nv12,${sw}`;
+  return sw;
 }

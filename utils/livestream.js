@@ -14,9 +14,9 @@ export function liveVideoArgs(rtspUrl, hw = null) {
     "-flags", "low_delay",
     "-rtsp_transport", "tcp",
     "-timeout", "5000000",
-    "-probesize", "65536",
-    "-analyzeduration", "0",
-    "-max_delay", "300000",
+    "-probesize", "327680",
+    "-analyzeduration", "500000",
+    "-max_delay", "500000",
     ...liveHwArgs(hw),
     "-i", rtspUrl,
     "-an",
@@ -81,33 +81,99 @@ function lastJpegIn(buf) {
   return Buffer.from(buf.subarray(start, end + 2));
 }
 
-export function startLiveHub(key, args) {
-  let hub = liveHubs.get(key);
-  if (hub?.proc && hub.proc.exitCode == null) return hub;
+const STALL_RE = /mediabufs_poll_bs|Failed to create V4L2|vaInitialize failed|Failed to initialise VAAPI/i;
+
+function attachLiveProc(hub, key, args) {
   const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
-  hub = { proc, viewers: new Set(), lastJpeg: null, tail: Buffer.alloc(0), errLines: 0 };
-  liveHubs.set(key, hub);
+  hub.proc = proc;
+  hub.errLines = 0;
+  hub.tail = Buffer.alloc(0);
+  hub.frameAt = Date.now();
   proc.stderr.on("data", (chunk) => {
-    if (hub.errLines >= 8) return;
     const text = String(chunk).trim();
     if (!text) return;
-    hub.errLines += 1;
-    console.error(`ffmpeg ${key}: ${text}`);
+    if (hub.errLines < 8) {
+      hub.errLines += 1;
+      console.error(`ffmpeg ${key}: ${text}`);
+    }
+    if (STALL_RE.test(text)) restartLiveHub(key, args, "decoder stall");
   });
   proc.stdout.on("data", (chunk) => {
+    hub.frameAt = Date.now();
     for (const view of [...hub.viewers]) view.push(chunk);
     hub.tail = Buffer.concat([hub.tail, chunk]);
     if (hub.tail.length > 512_000) hub.tail = hub.tail.subarray(hub.tail.length - 256_000);
     const jpeg = lastJpegIn(hub.tail);
     if (jpeg) hub.lastJpeg = jpeg;
   });
-  const dead = () => {
-    for (const view of [...hub.viewers]) view.end();
-    liveHubs.delete(key);
+  const onGone = () => {
+    if (liveHubs.get(key) !== hub || hub.proc !== proc) return;
+    if (hub.viewers.size === 0) {
+      clearInterval(hub.watch);
+      liveHubs.delete(key);
+      return;
+    }
+    restartLiveHub(key, args, "ffmpeg exit");
   };
-  proc.once("exit", dead);
-  proc.once("error", dead);
+  proc.once("exit", onGone);
+  proc.once("error", onGone);
+}
+
+function restartLiveHub(key, args, why) {
+  const hub = liveHubs.get(key);
+  if (!hub || hub.restarting) return;
+  hub.restarting = true;
+  console.error(`ffmpeg ${key}: restart (${why})`);
+  try {
+    if (hub.proc && hub.proc.exitCode == null) hub.proc.kill("SIGKILL");
+  } catch {
+    /* already dead */
+  }
+  setTimeout(() => {
+    hub.restarting = false;
+    if (liveHubs.get(key) !== hub) return;
+    attachLiveProc(hub, key, args);
+  }, 400);
+}
+
+export function startLiveHub(key, args) {
+  let hub = liveHubs.get(key);
+  if (hub) {
+    if (hub.proc && hub.proc.exitCode == null) return hub;
+    if (hub.restarting) return hub;
+    attachLiveProc(hub, key, args);
+    return hub;
+  }
+  hub = {
+    proc: null,
+    viewers: new Set(),
+    lastJpeg: null,
+    tail: Buffer.alloc(0),
+    errLines: 0,
+    restarting: false,
+    frameAt: Date.now(),
+    watch: null,
+  };
+  liveHubs.set(key, hub);
+  attachLiveProc(hub, key, args);
+  hub.watch = setInterval(() => {
+    if (liveHubs.get(key) !== hub) return;
+    if (hub.restarting) return;
+    if (Date.now() - hub.frameAt < 8000) return;
+    restartLiveHub(key, args, "no frames");
+  }, 2000);
   return hub;
+}
+
+export function retainLiveHubs(keys) {
+  const keep = new Set(keys);
+  for (const [key, hub] of liveHubs) {
+    if (keep.has(key)) continue;
+    clearInterval(hub.watch);
+    hub.restarting = false;
+    if (hub.proc && !hub.proc.killed) hub.proc.kill("SIGKILL");
+    liveHubs.delete(key);
+  }
 }
 
 export function retainLiveHubs(keys) {

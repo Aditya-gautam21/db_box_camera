@@ -1073,8 +1073,9 @@ function clamp(n, min, max) {
 }
 
 function overlayMetrics(img, canvas, world) {
+  const video = img._liveCanvas?.clientWidth ? img._liveCanvas : img;
   const cr = canvas.getBoundingClientRect();
-  const ir = img.getBoundingClientRect();
+  const ir = video.getBoundingClientRect();
   const nw = img.naturalWidth || img._frameW || 16;
   const nh = img.naturalHeight || img._frameH || 9;
   const scale = Math.min(ir.width / nw, ir.height / nh);
@@ -1855,7 +1856,8 @@ function initEventStudio(tile, cam, ui) {
     const add = document.createElement("button");
     add.type = "button";
     add.className = "event-draw-btn add";
-    add.textContent = "Add";
+    add.classList.toggle("active", state.drawMode);
+    add.textContent = state.drawMode ? "Drawing…" : "Add";
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "event-draw-btn";
@@ -1892,8 +1894,10 @@ function initEventStudio(tile, cam, ui) {
     state.selectedZone = index;
     state.drawMode = true;
     state.draft = [];
+    ui.canvas.classList.add("is-drawing");
     renderTools();
     drawOverlay();
+    setStatus("Drag on the picture to draw a cover");
   }
 
   function addCoverZone() {
@@ -1902,7 +1906,12 @@ function initEventStudio(tile, cam, ui) {
       setStatus("Zone limit reached");
       return;
     }
+    if (state.cover && !state.cover.privacy_zone_enable) {
+      state.cover.privacy_zone_enable = true;
+      state.coverRev = (state.coverRev || 0) + 1;
+    }
     beginCoverDraw(empty);
+    renderCoverParams();
   }
 
   function clearCoverZone(zone) {
@@ -1914,8 +1923,10 @@ function initEventStudio(tile, cam, ui) {
     const zones = state.cover?.zone_info || [];
     if (index < 0) zones.forEach(clearCoverZone);
     else if (zones[index]) clearCoverZone(zones[index]);
+    unbindCoverDrag();
     state.drawMode = false;
     state.draft = [];
+    ui.canvas.classList.remove("is-drawing");
     state.coverRev = (state.coverRev || 0) + 1;
     renderTools();
     drawOverlay();
@@ -1923,20 +1934,25 @@ function initEventStudio(tile, cam, ui) {
   }
 
   function cancelCoverDraw() {
+    unbindCoverDrag();
     state.drawMode = false;
     state.draft = [];
+    ui.canvas.classList.remove("is-drawing");
     renderTools();
     drawOverlay();
   }
 
   function finishCoverDraw() {
+    unbindCoverDrag();
     const zone = state.cover?.zone_info?.[state.selectedZone];
     const rect = state.draft.length >= 2 ? pointsToCoverRect(state.draft) : null;
     state.drawMode = false;
     state.draft = [];
+    ui.canvas.classList.remove("is-drawing");
     if (zone && rect && rect.width >= 8 && rect.height >= 8) {
       zone.rect = rect;
       zone.zone_enable = true;
+      state.cover.privacy_zone_enable = true;
       state.coverRev = (state.coverRev || 0) + 1;
       queueSave();
     }
@@ -2444,8 +2460,16 @@ function initEventStudio(tile, cam, ui) {
     renderTools();
   }
 
+  function capturePointer(event) {
+    try {
+      ui.canvas.setPointerCapture(event.pointerId);
+    } catch {
+      /* capture is optional on some Pi/touch stacks */
+    }
+  }
+
   function onCanvasPointer(event) {
-    if (focusedLiveTile() !== tile) return;
+    if (!tile.classList.contains("settings-open")) return;
     if (state.page === "osd") {
       onOsdPointer(event);
       return;
@@ -2477,7 +2501,7 @@ function initEventStudio(tile, cam, ui) {
         if (hit >= 0) {
           state.selectedRule = i;
           state.drag = { index: i, point: hit };
-          ui.canvas.setPointerCapture(event.pointerId);
+          capturePointer(event);
           drawOverlay();
           return;
         }
@@ -2514,7 +2538,7 @@ function initEventStudio(tile, cam, ui) {
         const dy = event.clientY - (ui.canvas.getBoundingClientRect().top + sy);
         if (dx >= 0 && dy >= 0 && dx <= 120 && dy <= 24) {
           state.drag = { key, dx: wx - (state.osd[key].pos.x || 0), dy: wy - (state.osd[key].pos.y || 0) };
-          ui.canvas.setPointerCapture(event.pointerId);
+          capturePointer(event);
           drawOverlay();
           return;
         }
@@ -2535,6 +2559,27 @@ function initEventStudio(tile, cam, ui) {
     }
   }
 
+  function unbindCoverDrag() {
+    window.removeEventListener("pointermove", coverDrawMove, true);
+    window.removeEventListener("pointerup", stopCoverDrag, true);
+    window.removeEventListener("pointercancel", stopCoverDrag, true);
+  }
+
+  function coverDrawMove(event) {
+    if (!state.drawMode || state.draft.length !== 2) return;
+    event.preventDefault();
+    const m = overlayMetrics(ui.img, ui.canvas, state.canvas);
+    state.draft[1] = m.toWorld(event.clientX, event.clientY);
+    drawOverlay();
+  }
+
+  function stopCoverDrag() {
+    window.removeEventListener("pointermove", coverDrawMove, true);
+    window.removeEventListener("pointerup", stopCoverDrag, true);
+    window.removeEventListener("pointercancel", stopCoverDrag, true);
+    if (state.drawMode) finishCoverDraw();
+  }
+
   function onCoverPointer(event) {
     if (!state.cover) return;
     event.preventDefault();
@@ -2545,15 +2590,10 @@ function initEventStudio(tile, cam, ui) {
     if (state.drawMode) {
       if (event.type === "pointerdown") {
         state.draft = [[wx, wy], [wx, wy]];
-        ui.canvas.setPointerCapture(event.pointerId);
+        window.addEventListener("pointermove", coverDrawMove, { capture: true, passive: false });
+        window.addEventListener("pointerup", stopCoverDrag, true);
+        window.addEventListener("pointercancel", stopCoverDrag, true);
         drawOverlay();
-      } else if (event.type === "pointermove" && state.draft.length === 2) {
-        state.draft[1] = [wx, wy];
-        drawOverlay();
-      } else if (event.type === "pointerup") {
-        finishCoverDraw();
-      } else if (event.type === "pointercancel") {
-        cancelCoverDraw();
       }
       return;
     }
@@ -2569,7 +2609,7 @@ function initEventStudio(tile, cam, ui) {
         if (hit < 0 && !inside) continue;
         state.selectedZone = i;
         state.drag = { index: i, point: hit >= 0 ? hit : -1, start: [wx, wy], rect: { ...zones[i].rect } };
-        ui.canvas.setPointerCapture(event.pointerId);
+        capturePointer(event);
         drawOverlay();
         return;
       }
@@ -2671,6 +2711,8 @@ function initEventStudio(tile, cam, ui) {
   ui.canvas.addEventListener("pointermove", onCanvasPointer);
   ui.canvas.addEventListener("pointerup", onCanvasPointer);
   ui.canvas.addEventListener("pointercancel", onCanvasPointer);
+  ui.canvas.addEventListener("lostpointercapture", onCanvasPointer);
+  ui.canvas.addEventListener("click", (event) => event.stopPropagation());
   ui.tools.addEventListener("pointerdown", (event) => event.stopPropagation());
   ui.tools.addEventListener("click", (event) => event.stopPropagation());
   ui.img.addEventListener("load", () => drawOverlay());

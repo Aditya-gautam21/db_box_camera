@@ -967,6 +967,12 @@ button[type="button"].ptz-nudge:disabled {
 .live-tile.is-fs.settings-open .event-overlay {
   display: block;
   pointer-events: auto;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.event-overlay.is-drawing {
+  cursor: crosshair;
 }
 
 .live-tile.is-fs.settings-open .event-tools {
