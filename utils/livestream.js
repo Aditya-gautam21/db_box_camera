@@ -15,8 +15,8 @@ export function liveVideoArgs(rtspUrl, hw = null) {
     "-flags", "low_delay",
     "-rtsp_transport", "tcp",
     "-timeout", "5000000",
-    "-probesize", "2000000",
-    "-analyzeduration", "2500000",
+    "-probesize", "1000000",
+    "-analyzeduration", "2000000",
     "-max_delay", "500000",
     ...liveHwArgs(hw),
     "-i", rtspUrl,
@@ -87,7 +87,10 @@ const STALL_RE = /mediabufs_poll|Failed to create V4L2|Unable to set controls|Fa
 
 function attachLiveProc(hub, key) {
   const args = liveVideoArgs(hub.rtspUrl, hub.hw);
-  const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
+  const proc = spawn("ffmpeg", args, {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, MALLOC_ARENA_MAX: "2" },
+  });
   hub.proc = proc;
   hub.errLines = 0;
   hub.tail = Buffer.alloc(0);
@@ -129,8 +132,13 @@ function restartLiveHub(key, why) {
   hub.restarting = true;
   console.error(`ffmpeg ${key}: restart (${why})`);
   if (hub.hw && !hub.gotFrame) {
-    disableLiveHw(`${hub.hw.kind} produced no frames`);
-    hub.hw = null;
+    if (hub.hw.kind === "drm" && hub.hw.prime !== false) {
+      hub.hw = { ...hub.hw, prime: false };
+      console.error(`ffmpeg ${key}: drm_prime stalled; retry without prime`);
+    } else {
+      disableLiveHw(`${hub.hw.kind} produced no frames`);
+      hub.hw = null;
+    }
   }
   try {
     if (hub.proc && hub.proc.exitCode == null) hub.proc.kill("SIGKILL");
@@ -154,7 +162,7 @@ export function startLiveHub(key, rtspUrl, hw = null) {
   }
   hub = {
     rtspUrl,
-    hw,
+    hw: hw ? { ...hw } : null,
     proc: null,
     viewers: new Set(),
     lastJpeg: null,

@@ -143,9 +143,10 @@ export function disableLiveHw(why) {
 export function liveHwArgs(hw) {
   if (!hw) return [];
   if (hw.kind === "drm") {
-    // No -hwaccel_output_format: Pi HEVC output is SAND, so let ffmpeg
-    // download it to a software format instead of pinning drm_prime.
-    return ["-hwaccel", "drm"];
+    // drm_prime keeps the HEVC DPB in CMA. Without it, ffmpeg copies every
+    // 1080p frame into process RSS (~190MB). If prime stalls, live drops it.
+    if (hw.prime === false) return ["-hwaccel", "drm"];
+    return ["-hwaccel", "drm", "-hwaccel_output_format", "drm_prime", "-extra_hw_frames", "6"];
   }
   if (hw.kind === "vaapi") {
     return [
@@ -166,5 +167,6 @@ export function liveHwFilter(hw) {
   const out = "fps=12";
   if (hw?.kind === "vaapi") return `hwdownload,format=nv12,${out}`;
   if (hw?.kind === "cuda") return `hwdownload,format=nv12,${out}`;
+  if (hw?.kind === "drm" && hw.prime !== false) return `hwdownload,format=yuv420p,${out}`;
   return out;
 }
