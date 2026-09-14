@@ -1,9 +1,48 @@
 import { app, BrowserWindow, protocol } from "electron";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { handleRequest, ROOT } from "./routes.js";
 import { startLiveDecodeProbe } from "../utils/hevcHw.js";
 
+function raspberryPi() {
+  try {
+    return readFileSync("/proc/device-tree/model", "utf8").includes("Raspberry Pi");
+  } catch {
+    return false;
+  }
+}
+
+function attachLocalDisplay() {
+  const uid = process.getuid?.();
+  if (uid != null && !process.env.XDG_RUNTIME_DIR) {
+    const dir = `/run/user/${uid}`;
+    if (existsSync(dir)) process.env.XDG_RUNTIME_DIR = dir;
+  }
+  const runtime = process.env.XDG_RUNTIME_DIR;
+  if (!process.env.DBUS_SESSION_BUS_ADDRESS && runtime && existsSync(`${runtime}/bus`)) {
+    process.env.DBUS_SESSION_BUS_ADDRESS = `unix:path=${runtime}/bus`;
+  }
+  if (!process.env.WAYLAND_DISPLAY && runtime && existsSync(`${runtime}/wayland-0`)) {
+    process.env.WAYLAND_DISPLAY = "wayland-0";
+  }
+  if (!process.env.DISPLAY && existsSync("/tmp/.X11-unix/X0")) {
+    process.env.DISPLAY = ":0";
+  }
+  if (!process.env.XAUTHORITY && process.env.HOME) {
+    const auth = path.join(process.env.HOME, ".Xauthority");
+    if (existsSync(auth)) process.env.XAUTHORITY = auth;
+  }
+}
+
+attachLocalDisplay();
+app.commandLine.appendSwitch("ozone-platform-hint", "auto");
+if (raspberryPi()) {
+  if (process.env.WAYLAND_DISPLAY) app.commandLine.appendSwitch("ozone-platform", "wayland");
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch("enable-unsafe-swiftshader");
+  app.commandLine.appendSwitch("use-gl", "angle");
+  app.commandLine.appendSwitch("use-angle", "swiftshader");
+}
 app.commandLine.appendSwitch(
   "disable-features",
   "VaapiVideoDecoder,VaapiVideoEncode,VaapiVideoDecoderLinuxGL,AcceleratedVideoDecodeLinuxGL",
