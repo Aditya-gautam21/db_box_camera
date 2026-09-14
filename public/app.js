@@ -308,7 +308,7 @@ function showLiveJpeg(img, jpeg) {
     }
     const canvas = img._liveCanvas || img.parentElement?.querySelector("canvas.live-feed");
     if (canvas) {
-      const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
+      const ctx = canvas.getContext("2d", { alpha: false });
       const cw = canvas.clientWidth || bmp.width;
       const ch = canvas.clientHeight || bmp.height;
       if (canvas.width !== cw) canvas.width = cw;

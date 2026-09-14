@@ -47,13 +47,11 @@ function attachLocalDisplay() {
 attachLocalDisplay();
 app.commandLine.appendSwitch("ozone-platform-hint", "auto");
 if (raspberryPi()) {
-  // Pi desktop here is X11 (lxterminal). Wayland ozone puts the window on a
-  // compositor that is not on screen, so the app looks "stuck" until Ctrl+C.
+  // Pi desktop here is X11 (lxterminal). Wayland ozone puts the window off-screen.
+  // SwiftShader is not shipped for linux-arm64, so disable-gpu leaves a black window.
+  // Skia software GL still paints HTML and the JPEG canvas.
   app.commandLine.appendSwitch("ozone-platform", process.env.DISPLAY ? "x11" : "wayland");
-  app.disableHardwareAcceleration();
-  app.commandLine.appendSwitch("enable-unsafe-swiftshader");
-  app.commandLine.appendSwitch("use-gl", "angle");
-  app.commandLine.appendSwitch("use-angle", "swiftshader");
+  app.commandLine.appendSwitch("use-gl", "disabled");
 }
 app.commandLine.appendSwitch(
   "disable-features",

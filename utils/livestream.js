@@ -7,7 +7,7 @@ const CLIP_VF = "fps=12,scale=960:-2:flags=fast_bilinear";
 export function liveVideoArgs(rtspUrl, hw = null) {
   return [
     "-hide_banner",
-    "-loglevel", "fatal",
+    "-loglevel", "error",
     "-threads", "1",
     "-filter_threads", "1",
     "-fflags", "+genpts+flush_packets",
@@ -32,7 +32,7 @@ export function liveVideoArgs(rtspUrl, hw = null) {
 export function clipVideoArgs(rtspUrl, duration) {
   const args = [
     "-hide_banner",
-    "-loglevel", "fatal",
+    "-loglevel", "error",
     "-threads", "1",
     "-rtsp_transport", "tcp",
     "-timeout", "8000000",
@@ -55,7 +55,7 @@ export function clipVideoArgs(rtspUrl, duration) {
 export function audioArgs(rtspUrl, { duration, sampleRate = 48000 } = {}) {
   const args = [
     "-hide_banner",
-    "-loglevel", "fatal",
+    "-loglevel", "error",
     "-threads", "1",
     "-rtsp_transport", "tcp",
     "-timeout", "8000000",
@@ -84,9 +84,16 @@ function lastJpegIn(buf) {
 export function startLiveHub(key, args) {
   let hub = liveHubs.get(key);
   if (hub?.proc && hub.proc.exitCode == null) return hub;
-  const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "ignore"] });
-  hub = { proc, viewers: new Set(), lastJpeg: null, tail: Buffer.alloc(0) };
+  const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
+  hub = { proc, viewers: new Set(), lastJpeg: null, tail: Buffer.alloc(0), errLines: 0 };
   liveHubs.set(key, hub);
+  proc.stderr.on("data", (chunk) => {
+    if (hub.errLines >= 8) return;
+    const text = String(chunk).trim();
+    if (!text) return;
+    hub.errLines += 1;
+    console.error(`ffmpeg ${key}: ${text}`);
+  });
   proc.stdout.on("data", (chunk) => {
     for (const view of [...hub.viewers]) view.push(chunk);
     hub.tail = Buffer.concat([hub.tail, chunk]);

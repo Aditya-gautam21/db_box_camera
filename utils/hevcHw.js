@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 
 const RENDER_NODES = ["/dev/dri/renderD128", "/dev/dri/renderD129", "/dev/dri/renderD130"];
 
@@ -46,12 +46,35 @@ async function ffmpegText(args, timeoutMs = 4000) {
   return err;
 }
 
+async function piModel() {
+  try {
+    return await readFile("/proc/device-tree/model", "utf8");
+  } catch {
+    return "";
+  }
+}
+
+async function rpiHevcNode() {
+  for (const n of [19, 31, 20, 18]) {
+    const device = `/dev/video${n}`;
+    if (await readable(device)) return device;
+  }
+  return "";
+}
+
 async function candidates() {
-  const [acc, dec] = await Promise.all([
+  const [acc, dec, model] = await Promise.all([
     ffmpegText(["-hwaccels"]),
     ffmpegText(["-decoders"]),
+    piModel(),
   ]);
   const list = [];
+  if (/Raspberry Pi/.test(model)) {
+    // HEVC on Pi is stateless DRM (/dev/video19), not hevc_v4l2m2m or VAAPI.
+    const device = /\bdrm\b/.test(acc) ? await rpiHevcNode() : "";
+    if (device) list.push({ kind: "drm", device });
+    return list;
+  }
   if (/hevc_v4l2m2m/.test(dec)) list.push({ kind: "v4l2m2m" });
   if (/\bvaapi\b/.test(acc)) {
     for (const device of RENDER_NODES) {
@@ -93,6 +116,7 @@ export function startLiveDecodeProbe() {
 
 export function liveHwArgs(hw) {
   if (!hw) return [];
+  if (hw.kind === "drm") return ["-hwaccel", "drm"];
   if (hw.kind === "vaapi") {
     return [
       "-hwaccel", "vaapi",
