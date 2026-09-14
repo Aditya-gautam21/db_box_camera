@@ -1,60 +1,8 @@
 import { spawn } from "node:child_process";
 import { liveHwArgs, liveHwFilter } from "./hevcHw.js";
 
-const hubs = new Map();
 const liveHubs = new Map();
-
-const MJPEG_HEADERS = {
-  "Content-Type": "multipart/x-mixed-replace; boundary=ffmpeg",
-  "Cache-Control": "no-cache, no-store",
-  Connection: "close",
-};
-
-const PCM_HEADERS = {
-  "Content-Type": "application/octet-stream",
-  "Cache-Control": "no-cache, no-store",
-  Connection: "close",
-};
-
-/** Main-stream live encode for the 4-tile page. */
-const LIVE_VF = "fps=12,scale=960:-2:flags=fast_bilinear";
-/** Clip encode. */
 const CLIP_VF = "fps=12,scale=960:-2:flags=fast_bilinear";
-
-function pipeFfmpeg(req, res, headers, args, { retries = 0, gapMs = 400 } = {}) {
-  res.set(headers);
-  let ff;
-  let stopped = false;
-  const stop = () => {
-    stopped = true;
-    ff?.kill("SIGKILL");
-  };
-  req.on("close", stop);
-  res.on("close", stop);
-
-  const start = (attempt) => {
-    if (stopped || res.writableEnded) return;
-    ff = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "ignore"] });
-    ff.stdout.pipe(res, { end: false });
-    ff.on("exit", (code) => {
-      try {
-        ff.stdout.unpipe(res);
-      } catch {
-        /* already unpiped */
-      }
-      if (stopped || res.writableEnded) {
-        if (!res.writableEnded) res.end();
-        return;
-      }
-      if (attempt < retries && code) {
-        setTimeout(() => start(attempt + 1), gapMs);
-        return;
-      }
-      if (!res.writableEnded) res.end();
-    });
-  };
-  start(0);
-}
 
 export function liveVideoArgs(rtspUrl, hw = null) {
   return [
@@ -73,7 +21,7 @@ export function liveVideoArgs(rtspUrl, hw = null) {
     "-i", rtspUrl,
     "-an",
     "-sn",
-    "-vf", liveHwFilter(hw, LIVE_VF),
+    "-vf", liveHwFilter(hw),
     "-f", "mpjpeg",
     "-q:v", "5",
     "-flush_packets", "1",
@@ -208,67 +156,4 @@ export function liveHubResponse(key, args, mimeType, request) {
       "cache-control": "no-cache, no-store",
     },
   });
-}
-
-function joinHub(key, req, res, headers, args) {
-  res.set(headers);
-  let hub = hubs.get(key);
-  if (!hub) {
-    const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "ignore"] });
-    hub = { proc, viewers: new Set() };
-    hubs.set(key, hub);
-    proc.stdout.on("data", (chunk) => {
-      for (const client of hub.viewers) {
-        try {
-          client.write(chunk);
-        } catch {
-          hub.viewers.delete(client);
-        }
-      }
-    });
-    proc.on("exit", () => {
-      for (const client of hub.viewers) {
-        try {
-          client.end();
-        } catch {
-          /* already closed */
-        }
-      }
-      hubs.delete(key);
-    });
-  }
-
-  hub.viewers.add(res);
-  const leave = () => {
-    if (!hub.viewers.has(res)) return;
-    hub.viewers.delete(res);
-    if (hub.viewers.size > 0) return;
-    hub.proc.kill("SIGKILL");
-    hubs.delete(key);
-  };
-  req.on("close", leave);
-  res.on("close", leave);
-}
-
-export function sampleRateFromQuery(req) {
-  const n = Number(req.query.ar);
-  if (n === 8000 || n === 16000 || n === 44100 || n === 48000) return n;
-  return 48000;
-}
-
-export function stream(req, res, rtspUrl, { duration } = {}) {
-  if (duration) {
-    pipeFfmpeg(req, res, MJPEG_HEADERS, clipVideoArgs(rtspUrl, duration), { retries: 1, gapMs: 400 });
-    return;
-  }
-  joinHub(`v:${rtspUrl}`, req, res, MJPEG_HEADERS, liveVideoArgs(rtspUrl));
-}
-
-export function audioStream(req, res, rtspUrl, { duration, sampleRate = 48000 } = {}) {
-  const args = audioArgs(rtspUrl, { duration, sampleRate });
-  if (duration) {
-    pipeFfmpeg(req, res, PCM_HEADERS, args, { retries: 1, gapMs: 400 });
-    return;
-  }
-  joinHub(`a:${rtspUrl}:${sampleRate}`, req, res, PCM_HEADERS, args);
 }

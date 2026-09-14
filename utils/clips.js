@@ -1,8 +1,5 @@
-import { spawn } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
-import { stream, audioStream } from "./livestream.js";
-import { getCamera } from "./addCamera.js";
 import { getSession } from "./cameraSession.js";
 
 export function playbackUri({ username, password, hostname, start, end }) {
@@ -34,33 +31,6 @@ function downloadStamp(value) {
   const m = stamp(value).match(/(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/);
   if (!m) throw Object.assign(new Error("invalid clip time"), { status: 400 });
   return `${m[1]}${m[2]}${m[3]}${m[4]}${m[5]}${m[6]}`;
-}
-
-async function playbackUrl(camId, start, end) {
-  const cam = await getCamera(camId);
-  if (!cam?.host) throw Object.assign(new Error("unknown camera"), { status: 404 });
-  return playbackUri({
-    username: cam.username,
-    password: cam.password,
-    hostname: cam.host,
-    start: stamp(start),
-    end: stamp(end),
-  });
-}
-
-export async function clipStream(req, res, { cam, start, end }) {
-  const url = await playbackUrl(cam, start, end);
-  stream(req, res, url, {
-    duration: durationSeconds(start, end),
-  });
-}
-
-export async function clipAudio(req, res, { cam, start, end, sampleRate }) {
-  const url = await playbackUrl(cam, start, end);
-  audioStream(req, res, url, {
-    duration: durationSeconds(start, end),
-    sampleRate,
-  });
 }
 
 export async function saveClip({ cam, start, end, outDir }) {

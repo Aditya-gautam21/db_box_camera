@@ -223,8 +223,8 @@ async function handleMedia(request, url, pathname) {
   if (streamCam) {
     const cam = await getCamera(streamCam.cam);
     if (!cam) return text("unknown camera", 404);
-    const rtsp = getRtspUrl(cam, 0);
     const { hw } = await liveDecodeMode();
+    const rtsp = getRtspUrl(cam, 0);
     return liveHubResponse(`v:${cam.id}`, liveVideoArgs(rtsp, hw), MJPEG, request);
   }
   const audioCam = match(pathname, "/stream-audio/:cam");
@@ -281,7 +281,7 @@ async function handleApi(request, url, pathname) {
   }
   if (method === "POST" && pathname === "/api/live/start") {
     const body = await bodyJson(request);
-    const ids = Array.isArray(body.cams) ? body.cams.map(String) : [];
+    const ids = [...new Set((Array.isArray(body.cams) ? body.cams : []).map(String).filter(Boolean))];
     const { hw } = await liveDecodeMode();
     const keys = [];
     await Promise.all(ids.map(async (id) => {

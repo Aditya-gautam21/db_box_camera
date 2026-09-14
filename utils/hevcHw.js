@@ -6,19 +6,14 @@ const RENDER_NODES = ["/dev/dri/renderD128", "/dev/dri/renderD129", "/dev/dri/re
 let cached;
 let inflight;
 
-function ffmpegCapture(args, timeoutMs, { wantStdout = false } = {}) {
+function ffmpegCapture(args, timeoutMs) {
   return new Promise((resolve) => {
     const proc = spawn("ffmpeg", ["-hide_banner", ...args], {
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let out = Buffer.alloc(0);
     let err = "";
     proc.stdout.on("data", (chunk) => {
-      if (wantStdout) {
-        if (out.length < 64) out = Buffer.concat([out, chunk]);
-      } else {
-        err += chunk;
-      }
+      err += chunk;
     });
     proc.stderr.on("data", (chunk) => {
       err += chunk;
@@ -26,13 +21,13 @@ function ffmpegCapture(args, timeoutMs, { wantStdout = false } = {}) {
     const done = (ok) => {
       clearTimeout(timer);
       if (!proc.killed) proc.kill("SIGKILL");
-      resolve({ ok, out, err });
+      resolve({ ok, err });
     };
     const timer = setTimeout(() => done(false), timeoutMs);
     proc.on("error", () => done(false));
     proc.on("close", (code) => {
       clearTimeout(timer);
-      resolve({ ok: code === 0, out, err });
+      resolve({ ok: code === 0, err });
     });
   });
 }
@@ -112,9 +107,9 @@ export function liveHwArgs(hw) {
   return [];
 }
 
-export function liveHwFilter(hw, swFilter) {
-  if (hw?.kind === "vaapi" || hw?.kind === "cuda") {
-    return `hwdownload,format=nv12,${swFilter}`;
-  }
-  return swFilter;
+export function liveHwFilter(hw) {
+  const fps = "fps=12";
+  if (hw?.kind === "vaapi") return `scale_vaapi=w=1280:h=-2,hwdownload,format=nv12,${fps}`;
+  if (hw?.kind === "cuda") return `scale_cuda=1280:-2,hwdownload,format=nv12,${fps}`;
+  return `${fps},scale=1280:-2:flags=fast_bilinear`;
 }

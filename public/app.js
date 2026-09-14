@@ -300,8 +300,7 @@ function showLiveJpeg(img, jpeg) {
     return;
   }
   img._paintBusy = true;
-  const blob = new Blob([jpeg.slice()], { type: "image/jpeg" });
-  createImageBitmap(blob).then((bmp) => {
+  createImageBitmap(new Blob([jpeg], { type: "image/jpeg" })).then((bmp) => {
     if (!img._liveAbort) {
       bmp.close();
       img._paintBusy = false;
@@ -317,17 +316,14 @@ function showLiveJpeg(img, jpeg) {
       ctx.fillStyle = "#000";
       ctx.fillRect(0, 0, cw, ch);
       const scale = Math.min(cw / bmp.width, ch / bmp.height);
-      const dw = bmp.width * scale;
-      const dh = bmp.height * scale;
-      ctx.drawImage(bmp, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+      ctx.drawImage(bmp, (cw - bmp.width * scale) / 2, (ch - bmp.height * scale) / 2, bmp.width * scale, bmp.height * scale);
       img._liveCanvas = canvas;
     }
-    const url = URL.createObjectURL(blob);
-    const prev = img._blob;
-    img._blob = url;
-    img.src = url;
-    if (prev) URL.revokeObjectURL(prev);
+    const first = !img._frameW;
+    img._frameW = bmp.width;
+    img._frameH = bmp.height;
     bmp.close();
+    if (first) img.dispatchEvent(new Event("load"));
     img._paintBusy = false;
     const queued = img._paintNext;
     img._paintNext = null;
@@ -343,11 +339,7 @@ function showLiveJpeg(img, jpeg) {
 function stopLiveJpeg(img) {
   img._liveAbort?.abort();
   img._liveAbort = null;
-  if (img._blob) {
-    URL.revokeObjectURL(img._blob);
-    img._blob = "";
-  }
-  img.removeAttribute("src");
+  img.dataset.playing = "";
 }
 
 function playLiveJpeg(img, url) {
@@ -355,6 +347,7 @@ function playLiveJpeg(img, url) {
   if (!url) return;
   const ac = new AbortController();
   img._liveAbort = ac;
+  img.dataset.playing = url;
   (async () => {
     const res = await fetch(url, { signal: ac.signal, cache: "no-store" });
     if (!res.ok || !res.body) return;
@@ -375,11 +368,22 @@ function playLiveJpeg(img, url) {
   })().catch(() => {});
 }
 
-function syncLiveHubs() {
-  const ids = [...liveDash.querySelectorAll(".live-tile")]
+function liveStreamUrl(camId) {
+  return `/stream/${encodeURIComponent(camId)}`;
+}
+
+function liveAudioUrl(camId) {
+  return `/stream-audio/${encodeURIComponent(camId)}`;
+}
+
+function liveHubCams() {
+  return [...liveDash.querySelectorAll(".live-tile")]
     .filter((tile) => liveTileImg(tile)?._liveAbort)
     .map((tile) => tile.dataset.cam)
     .filter(Boolean);
+}
+
+function syncLiveHubs(ids = liveHubCams()) {
   fetch("/api/live/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -388,15 +392,9 @@ function syncLiveHubs() {
 }
 
 function startLivePageStreams() {
-  const imgs = [...liveDash.querySelectorAll(".live-stage > img")];
-  fetch("/api/live/start", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      cams: [...liveDash.querySelectorAll(".live-tile")].map((tile) => tile.dataset.cam).filter(Boolean),
-    }),
-  }).catch(() => {});
-  for (const img of imgs) {
+  const tiles = [...liveDash.querySelectorAll(".live-tile")];
+  syncLiveHubs(tiles.map((tile) => tile.dataset.cam).filter(Boolean));
+  for (const img of liveDash.querySelectorAll(".live-stage > img")) {
     if (img.dataset.stream) playLiveJpeg(img, img.dataset.stream);
   }
 }
@@ -434,17 +432,19 @@ function liveTileImg(tile) {
   return tile.querySelector(".live-stage > img");
 }
 
-function pauseLiveTileStream(tile, pause) {
+function pauseLiveTileStream(tile, pause, { sync = true } = {}) {
   const img = liveTileImg(tile);
   if (!img || !tile.dataset.cam) return;
-  const src = `/stream/${encodeURIComponent(tile.dataset.cam)}`;
+  const src = liveStreamUrl(tile.dataset.cam);
   if (pause) {
     stopLiveJpeg(img);
-    syncLiveHubs();
+    img.dataset.playing = "";
+    if (sync) syncLiveHubs();
     return;
   }
-  if (!img._liveAbort) playLiveJpeg(img, src);
-  syncLiveHubs();
+  if (img.dataset.playing !== src || !img._liveAbort) playLiveJpeg(img, src);
+  img.dataset.playing = src;
+  if (sync) syncLiveHubs();
 }
 
 function onLiveTileFullscreen() {
@@ -455,19 +455,21 @@ function onLiveTileFullscreen() {
       el.querySelector(".live-tile-settings")?.classList.remove("active");
       el.querySelector(".live-tile-settings")?.setAttribute("aria-pressed", "false");
       el._closeEvents?.();
-      pauseLiveTileStream(el, false);
+      pauseLiveTileStream(el, false, { sync: false });
     }
+    syncLiveHubs();
     if (document.body.dataset.page === "live") stopAudio();
     return;
   }
   for (const el of liveDash.querySelectorAll(".live-tile")) {
-    pauseLiveTileStream(el, el !== tile);
+    pauseLiveTileStream(el, el !== tile, { sync: false });
   }
+  syncLiveHubs();
   const cam = tile.dataset.cam;
   const label = tile.dataset.label || cam;
   statusEl.textContent = `Live · ${label}`;
   modeLabel.textContent = `Live · ${label}`;
-  startPcmAudio(`/stream-audio/${cam}`);
+  startPcmAudio(liveAudioUrl(cam));
 }
 
 function cameraName(cam) {
@@ -1073,8 +1075,8 @@ function clamp(n, min, max) {
 function overlayMetrics(img, canvas, world) {
   const cr = canvas.getBoundingClientRect();
   const ir = img.getBoundingClientRect();
-  const nw = img.naturalWidth || 16;
-  const nh = img.naturalHeight || 9;
+  const nw = img.naturalWidth || img._frameW || 16;
+  const nh = img.naturalHeight || img._frameH || 9;
   const scale = Math.min(ir.width / nw, ir.height / nh);
   const dw = nw * scale;
   const dh = nh * scale;
@@ -2695,7 +2697,7 @@ function makeLiveTile(cam) {
   const img = document.createElement("img");
   img.alt = label;
   img.className = "live-probe";
-  img.dataset.stream = `/stream/${encodeURIComponent(cam.id)}`;
+  img.dataset.stream = liveStreamUrl(cam.id);
   img._liveCanvas = canvas;
   const overlay = document.createElement("canvas");
   overlay.className = "event-overlay";
@@ -3322,7 +3324,7 @@ function setAiStream(camId) {
   const img = document.getElementById("ai-view");
   if (!img) return;
   aiDraft = null;
-  img.src = camId ? `/stream/${encodeURIComponent(camId)}` : "";
+  img.src = camId ? liveStreamUrl(camId) : "";
 }
 
 function onAiPointer(event) {
