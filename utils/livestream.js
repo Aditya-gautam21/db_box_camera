@@ -177,15 +177,6 @@ export function retainLiveHubs(keys) {
   }
 }
 
-export function retainLiveHubs(keys) {
-  const keep = new Set(keys);
-  for (const [key, hub] of liveHubs) {
-    if (keep.has(key)) continue;
-    if (!hub.proc.killed) hub.proc.kill("SIGKILL");
-    liveHubs.delete(key);
-  }
-}
-
 export function liveHubResponse(key, args, mimeType, request) {
   const hub = startLiveHub(key, args);
   let view;
