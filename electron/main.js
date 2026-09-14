@@ -2,6 +2,7 @@ import { app, BrowserWindow, protocol } from "electron";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { handleRequest, ROOT } from "./routes.js";
+import { startLiveDecodeProbe } from "../utils/hevcHw.js";
 
 function raspberryPi() {
   try {
@@ -99,6 +100,7 @@ loadEnvFile(path.join(ROOT, ".env"));
 
 app.whenReady().then(() => {
   protocol.handle("app", handleRequest);
+  startLiveDecodeProbe();
   const window = new BrowserWindow({
     width: 1280,
     height: 800,

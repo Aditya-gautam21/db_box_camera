@@ -71,8 +71,11 @@ async function candidates() {
   const list = [];
   if (/Raspberry Pi/.test(model)) {
     // HEVC on Pi is stateless DRM (/dev/video19), not hevc_v4l2m2m or VAAPI.
-    const device = /\bdrm\b/.test(acc) ? await rpiHevcNode() : "";
-    if (device) list.push({ kind: "drm", device });
+    const device = await rpiHevcNode();
+    if (device && /\bdrm\b/.test(acc)) list.push({ kind: "drm", device });
+    else if (device) {
+      console.log("live decode: Pi HEVC node found, but this ffmpeg has no drm hwaccel");
+    }
     return list;
   }
   if (/\bvaapi\b/.test(acc)) {
@@ -127,17 +130,31 @@ export function startLiveDecodeProbe() {
   liveDecodeMode();
 }
 
+// The Pi HEVC block can wedge (kernel hung_task in hevc_d_release) when its
+// clock gets gated; ffmpeg then opens the stream and never decodes a frame.
+// There is no way to detect that up front, so live falls back at runtime.
+export function disableLiveHw(why) {
+  if (cached && !cached.hw) return;
+  console.error(`live decode: hardware disabled (${why}); using software`);
+  cached = { hw: null };
+  inflight = null;
+}
+
 export function liveHwArgs(hw) {
   if (!hw) return [];
-  if (hw.kind === "drm") return ["-hwaccel", "drm"];
+  if (hw.kind === "drm") {
+    // No -hwaccel_output_format: Pi HEVC output is SAND, so let ffmpeg
+    // download it to a software format instead of pinning drm_prime.
+    return ["-hwaccel", "drm"];
+  }
   if (hw.kind === "vaapi") {
     return [
       "-hwaccel", "vaapi",
       "-hwaccel_device", hw.device,
       "-hwaccel_output_format", "vaapi",
+      "-extra_hw_frames", "8",
     ];
   }
-  if (hw.kind === "v4l2m2m") return ["-c:v", "hevc_v4l2m2m"];
   if (hw.kind === "cuda") {
     return ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"];
   }
@@ -145,11 +162,9 @@ export function liveHwArgs(hw) {
 }
 
 export function liveHwFilter(hw) {
-  const sw = "fps=12,scale=1280:-2:flags=fast_bilinear";
-  if (hw?.kind === "vaapi") return `scale_vaapi=w=1280:h=-2,hwdownload,format=nv12,fps=12`;
-  if (hw?.kind === "cuda") return `scale_cuda=1280:-2,hwdownload,format=nv12,fps=12`;
-  // DRM/V4L2 frames must leave the decoder pool before software filters.
-  // Holding them in fps/scale stalls mediabufs_poll_bs and blanks live.
-  if (hw?.kind === "drm" || hw?.kind === "v4l2m2m") return `hwdownload,format=nv12,${sw}`;
-  return sw;
+  // Keep 1080p. Download DRM/VAAPI frames before fps so decoder buffers return.
+  const out = "fps=12";
+  if (hw?.kind === "vaapi") return `hwdownload,format=nv12,${out}`;
+  if (hw?.kind === "cuda") return `hwdownload,format=nv12,${out}`;
+  return out;
 }

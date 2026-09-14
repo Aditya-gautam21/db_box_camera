@@ -1,12 +1,13 @@
 import { spawn } from "node:child_process";
+import { disableLiveHw, liveHwArgs, liveHwFilter } from "./hevcHw.js";
 
 const liveHubs = new Map();
-const LIVE_VF = "fps=12,scale=1280:-2:flags=fast_bilinear";
 const CLIP_VF = "fps=12,scale=960:-2:flags=fast_bilinear";
 
-export function liveVideoArgs(rtspUrl) {
+export function liveVideoArgs(rtspUrl, hw = null) {
   return [
     "-hide_banner",
+    "-nostdin",
     "-loglevel", "error",
     "-threads", "1",
     "-filter_threads", "1",
@@ -14,15 +15,15 @@ export function liveVideoArgs(rtspUrl) {
     "-flags", "low_delay",
     "-rtsp_transport", "tcp",
     "-timeout", "5000000",
-    "-probesize", "327680",
-    "-analyzeduration", "500000",
+    "-probesize", "2000000",
+    "-analyzeduration", "2500000",
     "-max_delay", "500000",
-    "-hwaccel", "none",
-    "-c:v", "hevc",
+    ...liveHwArgs(hw),
     "-i", rtspUrl,
+    "-map", "0:v:0?",
     "-an",
     "-sn",
-    "-vf", LIVE_VF,
+    "-vf", liveHwFilter(hw),
     "-f", "mpjpeg",
     "-q:v", "5",
     "-flush_packets", "1",
@@ -82,9 +83,10 @@ function lastJpegIn(buf) {
   return Buffer.from(buf.subarray(start, end + 2));
 }
 
-const STALL_RE = /mediabufs_poll_bs|Failed to create V4L2|vaInitialize failed|Failed to initialise VAAPI/i;
+const STALL_RE = /mediabufs_poll|Failed to create V4L2|Unable to set controls|Failed to set req ctls|vaInitialize failed|Failed to initialise VAAPI/i;
 
-function attachLiveProc(hub, key, args) {
+function attachLiveProc(hub, key) {
+  const args = liveVideoArgs(hub.rtspUrl, hub.hw);
   const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
   hub.proc = proc;
   hub.errLines = 0;
@@ -97,13 +99,14 @@ function attachLiveProc(hub, key, args) {
       hub.errLines += 1;
       console.error(`ffmpeg ${key}: ${text}`);
     }
-    if (STALL_RE.test(text)) restartLiveHub(key, args, "decoder stall");
+    if (STALL_RE.test(text)) restartLiveHub(key, "decoder stall");
   });
   proc.stdout.on("data", (chunk) => {
     hub.frameAt = Date.now();
+    hub.gotFrame = true;
     for (const view of [...hub.viewers]) view.push(chunk);
     hub.tail = Buffer.concat([hub.tail, chunk]);
-    if (hub.tail.length > 512_000) hub.tail = hub.tail.subarray(hub.tail.length - 256_000);
+    if (hub.tail.length > 160_000) hub.tail = hub.tail.subarray(hub.tail.length - 80_000);
     const jpeg = lastJpegIn(hub.tail);
     if (jpeg) hub.lastJpeg = jpeg;
   });
@@ -114,17 +117,21 @@ function attachLiveProc(hub, key, args) {
       liveHubs.delete(key);
       return;
     }
-    restartLiveHub(key, args, "ffmpeg exit");
+    restartLiveHub(key, "ffmpeg exit");
   };
   proc.once("exit", onGone);
   proc.once("error", onGone);
 }
 
-function restartLiveHub(key, args, why) {
+function restartLiveHub(key, why) {
   const hub = liveHubs.get(key);
   if (!hub || hub.restarting) return;
   hub.restarting = true;
   console.error(`ffmpeg ${key}: restart (${why})`);
+  if (hub.hw && !hub.gotFrame) {
+    disableLiveHw(`${hub.hw.kind} produced no frames`);
+    hub.hw = null;
+  }
   try {
     if (hub.proc && hub.proc.exitCode == null) hub.proc.kill("SIGKILL");
   } catch {
@@ -133,35 +140,38 @@ function restartLiveHub(key, args, why) {
   setTimeout(() => {
     hub.restarting = false;
     if (liveHubs.get(key) !== hub) return;
-    attachLiveProc(hub, key, args);
+    attachLiveProc(hub, key);
   }, 400);
 }
 
-export function startLiveHub(key, args) {
+export function startLiveHub(key, rtspUrl, hw = null) {
   let hub = liveHubs.get(key);
   if (hub) {
     if (hub.proc && hub.proc.exitCode == null) return hub;
     if (hub.restarting) return hub;
-    attachLiveProc(hub, key, args);
+    attachLiveProc(hub, key);
     return hub;
   }
   hub = {
+    rtspUrl,
+    hw,
     proc: null,
     viewers: new Set(),
     lastJpeg: null,
     tail: Buffer.alloc(0),
     errLines: 0,
     restarting: false,
+    gotFrame: false,
     frameAt: Date.now(),
     watch: null,
   };
   liveHubs.set(key, hub);
-  attachLiveProc(hub, key, args);
+  attachLiveProc(hub, key);
   hub.watch = setInterval(() => {
     if (liveHubs.get(key) !== hub) return;
     if (hub.restarting) return;
     if (Date.now() - hub.frameAt < 8000) return;
-    restartLiveHub(key, args, "no frames");
+    restartLiveHub(key, "no frames");
   }, 2000);
   return hub;
 }
@@ -177,8 +187,8 @@ export function retainLiveHubs(keys) {
   }
 }
 
-export function liveHubResponse(key, args, mimeType, request) {
-  const hub = startLiveHub(key, args);
+export function liveHubResponse(key, rtspUrl, hw, mimeType, request) {
+  const hub = startLiveHub(key, rtspUrl, hw);
   let view;
   const stream = new ReadableStream({
     start(controller) {
