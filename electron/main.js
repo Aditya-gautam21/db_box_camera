@@ -12,6 +12,11 @@ function raspberryPi() {
   }
 }
 
+function dbusAddress(value) {
+  const addr = String(value || "").trim().replace(/^['"]|['"]$/g, "");
+  return /^(unix|tcp):/.test(addr) ? addr : "";
+}
+
 function attachLocalDisplay() {
   const uid = process.getuid?.();
   if (uid != null && !process.env.XDG_RUNTIME_DIR) {
@@ -19,12 +24,17 @@ function attachLocalDisplay() {
     if (existsSync(dir)) process.env.XDG_RUNTIME_DIR = dir;
   }
   const runtime = process.env.XDG_RUNTIME_DIR;
-  if (!process.env.DBUS_SESSION_BUS_ADDRESS && runtime && existsSync(`${runtime}/bus`)) {
+  const session = dbusAddress(process.env.DBUS_SESSION_BUS_ADDRESS);
+  if (session) {
+    process.env.DBUS_SESSION_BUS_ADDRESS = session;
+  } else if (runtime && existsSync(`${runtime}/bus`)) {
     process.env.DBUS_SESSION_BUS_ADDRESS = `unix:path=${runtime}/bus`;
+  } else {
+    delete process.env.DBUS_SESSION_BUS_ADDRESS;
   }
-  if (!process.env.WAYLAND_DISPLAY && runtime && existsSync(`${runtime}/wayland-0`)) {
-    process.env.WAYLAND_DISPLAY = "wayland-0";
-  }
+  const system = dbusAddress(process.env.DBUS_SYSTEM_BUS_ADDRESS);
+  if (system) process.env.DBUS_SYSTEM_BUS_ADDRESS = system;
+  else delete process.env.DBUS_SYSTEM_BUS_ADDRESS;
   if (!process.env.DISPLAY && existsSync("/tmp/.X11-unix/X0")) {
     process.env.DISPLAY = ":0";
   }
@@ -37,7 +47,9 @@ function attachLocalDisplay() {
 attachLocalDisplay();
 app.commandLine.appendSwitch("ozone-platform-hint", "auto");
 if (raspberryPi()) {
-  if (process.env.WAYLAND_DISPLAY) app.commandLine.appendSwitch("ozone-platform", "wayland");
+  // Pi desktop here is X11 (lxterminal). Wayland ozone puts the window on a
+  // compositor that is not on screen, so the app looks "stuck" until Ctrl+C.
+  app.commandLine.appendSwitch("ozone-platform", process.env.DISPLAY ? "x11" : "wayland");
   app.disableHardwareAcceleration();
   app.commandLine.appendSwitch("enable-unsafe-swiftshader");
   app.commandLine.appendSwitch("use-gl", "angle");
@@ -99,6 +111,10 @@ app.whenReady().then(() => {
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+  window.once("ready-to-show", () => {
+    window.show();
+    window.focus();
   });
   window.loadURL("app://ui/live");
 });
