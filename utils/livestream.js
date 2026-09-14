@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
-import { liveHwArgs, liveHwFilter } from "./hevcHw.js";
 
 const liveHubs = new Map();
+const LIVE_VF = "fps=12,scale=1280:-2:flags=fast_bilinear";
 const CLIP_VF = "fps=12,scale=960:-2:flags=fast_bilinear";
 
-export function liveVideoArgs(rtspUrl, hw = null) {
+export function liveVideoArgs(rtspUrl) {
   return [
     "-hide_banner",
     "-loglevel", "error",
@@ -17,11 +17,12 @@ export function liveVideoArgs(rtspUrl, hw = null) {
     "-probesize", "327680",
     "-analyzeduration", "500000",
     "-max_delay", "500000",
-    ...liveHwArgs(hw),
+    "-hwaccel", "none",
+    "-c:v", "hevc",
     "-i", rtspUrl,
     "-an",
     "-sn",
-    "-vf", liveHwFilter(hw),
+    "-vf", LIVE_VF,
     "-f", "mpjpeg",
     "-q:v", "5",
     "-flush_packets", "1",

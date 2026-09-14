@@ -12,7 +12,6 @@ import { scanCameras } from "../utils/cameraScan.js";
 import { playbackUri, saveClip } from "../utils/clips.js";
 import { listSnappedFaces, getSnapJpeg } from "../utils/fetchFaces.js";
 import { saveLineCross, clearLineCross } from "../utils/lineCross.js";
-import { liveDecodeMode } from "../utils/hevcHw.js";
 import { audioArgs, clipVideoArgs, liveVideoArgs, liveHubResponse, startLiveHub, retainLiveHubs } from "../utils/livestream.js";
 import {
   listGroups,
@@ -223,9 +222,8 @@ async function handleMedia(request, url, pathname) {
   if (streamCam) {
     const cam = await getCamera(streamCam.cam);
     if (!cam) return text("unknown camera", 404);
-    const { hw } = await liveDecodeMode();
     const rtsp = getRtspUrl(cam, 0);
-    return liveHubResponse(`v:${cam.id}`, liveVideoArgs(rtsp, hw), MJPEG, request);
+    return liveHubResponse(`v:${cam.id}`, liveVideoArgs(rtsp), MJPEG, request);
   }
   const audioCam = match(pathname, "/stream-audio/:cam");
   if (audioCam) {
@@ -282,14 +280,13 @@ async function handleApi(request, url, pathname) {
   if (method === "POST" && pathname === "/api/live/start") {
     const body = await bodyJson(request);
     const ids = [...new Set((Array.isArray(body.cams) ? body.cams : []).map(String).filter(Boolean))];
-    const { hw } = await liveDecodeMode();
     const keys = [];
     await Promise.all(ids.map(async (id) => {
       const cam = await getCamera(id);
       if (!cam) return;
       const key = `v:${cam.id}`;
       keys.push(key);
-      startLiveHub(key, liveVideoArgs(getRtspUrl(cam, 0), hw));
+      startLiveHub(key, liveVideoArgs(getRtspUrl(cam, 0)));
     }));
     retainLiveHubs(keys);
     return json({ ok: true });
