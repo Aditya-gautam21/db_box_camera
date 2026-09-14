@@ -5,7 +5,7 @@ const PTZ_GET = "/API/PreviewChannel/PTZ/Get";
 const PTZ_RANGE = "/API/PreviewChannel/PTZ/Range";
 const PTZ_CONTROL = "/API/PreviewChannel/PTZ/Control";
 const PTZ_PROGRESS = "/API/PreviewChannel/PTZ/Control/Progress";
-const DEFAULT_SPEED = 50;
+const DEFAULT_SPEED = 100;
 const DEFAULT_CHANNEL = "CH1";
 
 const lastPos = new Map();
@@ -104,13 +104,20 @@ export async function getPtzPosition(camId, channel = DEFAULT_CHANNEL) {
   });
 }
 
-export async function getPtzProgress(camId, channel = DEFAULT_CHANNEL) {
+function isCtl(value) {
+  if (value === true || value === 1) return true;
+  if (typeof value === "string") return /^(1|true|yes|on)$/i.test(value.trim());
+  return false;
+}
+
+export async function getPtzProgress(camId) {
+  const { channel } = await requirePtzCamera(camId);
   const session = await getSession(camId);
   const post = session.postNow || session.post;
   const res = assertOk(await post(PTZ_PROGRESS, { channel }));
   return {
     channel: res.data?.channel ?? channel,
-    isctl: res.data?.isctl ?? false,
+    isctl: isCtl(res.data?.isctl),
   };
 }
 
@@ -134,8 +141,9 @@ export async function setZoom(camId, zoom, {
   const { channel: ch } = await requirePtzCamera(camId);
   const target = Number(zoom);
   if (!Number.isFinite(target)) throw new Error("zoom required");
-  const current = await knownPos(camId, ch);
-  const focusAt = Number.isFinite(Number(focus)) ? Number(focus) : current.focus_slider;
+  const focusAt = Number.isFinite(Number(focus))
+    ? Number(focus)
+    : (await knownPos(camId, ch)).focus_slider;
   return sendPtz(camId, ch, {
     cmd: "Ptz_Zoom_Position",
     focus_slider: focusAt,
@@ -155,8 +163,9 @@ export async function setFocus(camId, focus, {
   const { channel: ch } = await requirePtzCamera(camId);
   const target = Number(focus);
   if (!Number.isFinite(target)) throw new Error("focus required");
-  const current = await knownPos(camId, ch);
-  const zoomAt = Number.isFinite(Number(zoom)) ? Number(zoom) : current.zoom_slider;
+  const zoomAt = Number.isFinite(Number(zoom))
+    ? Number(zoom)
+    : (await knownPos(camId, ch)).zoom_slider;
   return sendPtz(camId, ch, {
     cmd: "Ptz_Focus_Position",
     focus_slider: target,

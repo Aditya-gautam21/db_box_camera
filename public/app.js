@@ -269,9 +269,142 @@ function stopView() {
   setTransport(null);
 }
 
+function concatBytes(a, b) {
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a, 0);
+  out.set(b, a.length);
+  return out;
+}
+
+function takeJpeg(buf) {
+  let start = -1;
+  for (let i = 0; i < buf.length - 1; i++) {
+    if (buf[i] === 0xff && buf[i + 1] === 0xd8) {
+      start = i;
+      break;
+    }
+  }
+  if (start < 0) return { jpeg: null, rest: buf.length > 2e6 ? buf.subarray(buf.length - 2) : buf };
+  for (let i = start + 2; i < buf.length - 1; i++) {
+    if (buf[i] === 0xff && buf[i + 1] === 0xd9) {
+      return { jpeg: buf.subarray(start, i + 2), rest: buf.subarray(i + 2) };
+    }
+  }
+  const rest = buf.subarray(start);
+  return { jpeg: null, rest: rest.length > 2e6 ? rest.subarray(rest.length - 64) : rest };
+}
+
+function showLiveJpeg(img, jpeg) {
+  if (img._paintBusy) {
+    img._paintNext = jpeg;
+    return;
+  }
+  img._paintBusy = true;
+  const blob = new Blob([jpeg.slice()], { type: "image/jpeg" });
+  createImageBitmap(blob).then((bmp) => {
+    if (!img._liveAbort) {
+      bmp.close();
+      img._paintBusy = false;
+      return;
+    }
+    const canvas = img._liveCanvas || img.parentElement?.querySelector("canvas.live-feed");
+    if (canvas) {
+      const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
+      const cw = canvas.clientWidth || bmp.width;
+      const ch = canvas.clientHeight || bmp.height;
+      if (canvas.width !== cw) canvas.width = cw;
+      if (canvas.height !== ch) canvas.height = ch;
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, cw, ch);
+      const scale = Math.min(cw / bmp.width, ch / bmp.height);
+      const dw = bmp.width * scale;
+      const dh = bmp.height * scale;
+      ctx.drawImage(bmp, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+      img._liveCanvas = canvas;
+    }
+    const url = URL.createObjectURL(blob);
+    const prev = img._blob;
+    img._blob = url;
+    img.src = url;
+    if (prev) URL.revokeObjectURL(prev);
+    bmp.close();
+    img._paintBusy = false;
+    const queued = img._paintNext;
+    img._paintNext = null;
+    if (queued && img._liveAbort) showLiveJpeg(img, queued);
+  }).catch(() => {
+    img._paintBusy = false;
+    const queued = img._paintNext;
+    img._paintNext = null;
+    if (queued && img._liveAbort) showLiveJpeg(img, queued);
+  });
+}
+
+function stopLiveJpeg(img) {
+  img._liveAbort?.abort();
+  img._liveAbort = null;
+  if (img._blob) {
+    URL.revokeObjectURL(img._blob);
+    img._blob = "";
+  }
+  img.removeAttribute("src");
+}
+
+function playLiveJpeg(img, url) {
+  stopLiveJpeg(img);
+  if (!url) return;
+  const ac = new AbortController();
+  img._liveAbort = ac;
+  (async () => {
+    const res = await fetch(url, { signal: ac.signal, cache: "no-store" });
+    if (!res.ok || !res.body) return;
+    const reader = res.body.getReader();
+    let buf = new Uint8Array(0);
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf = concatBytes(buf, value);
+      while (true) {
+        const next = takeJpeg(buf);
+        buf = next.rest;
+        if (!next.jpeg) break;
+        if (img._liveAbort !== ac) return;
+        showLiveJpeg(img, next.jpeg);
+      }
+    }
+  })().catch(() => {});
+}
+
+function syncLiveHubs() {
+  const ids = [...liveDash.querySelectorAll(".live-tile")]
+    .filter((tile) => liveTileImg(tile)?._liveAbort)
+    .map((tile) => tile.dataset.cam)
+    .filter(Boolean);
+  fetch("/api/live/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cams: ids }),
+  }).catch(() => {});
+}
+
+function startLivePageStreams() {
+  const imgs = [...liveDash.querySelectorAll(".live-stage > img")];
+  fetch("/api/live/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      cams: [...liveDash.querySelectorAll(".live-tile")].map((tile) => tile.dataset.cam).filter(Boolean),
+    }),
+  }).catch(() => {});
+  for (const img of imgs) {
+    if (img.dataset.stream) playLiveJpeg(img, img.dataset.stream);
+  }
+}
+
 function stopLiveDash() {
-  for (const img of liveDash.querySelectorAll("img")) img.removeAttribute("src");
+  for (const img of liveDash.querySelectorAll("img")) stopLiveJpeg(img);
   liveDash.replaceChildren();
+  syncLiveHubs();
 }
 
 function focusedLiveTile() {
@@ -306,10 +439,12 @@ function pauseLiveTileStream(tile, pause) {
   if (!img || !tile.dataset.cam) return;
   const src = `/stream/${encodeURIComponent(tile.dataset.cam)}`;
   if (pause) {
-    img.removeAttribute("src");
+    stopLiveJpeg(img);
+    syncLiveHubs();
     return;
   }
-  if (img.getAttribute("src") !== src) img.src = src;
+  if (!img._liveAbort) playLiveJpeg(img, src);
+  syncLiveHubs();
 }
 
 function onLiveTileFullscreen() {
@@ -476,9 +611,9 @@ async function ptzPost(camId, action, body = {}) {
   return data;
 }
 
-async function syncPtzPanel(tile) {
+async function syncPtzPanel(tile, { force = false } = {}) {
   const panel = tile.querySelector(".ptz-panel");
-  if (!panel || panel.dataset.busy === "1") return;
+  if (!panel || (!force && panel.dataset.busy === "1")) return;
   try {
     const res = await fetch(`/api/cameras/${encodeURIComponent(tile.dataset.cam)}/ptz`);
     const data = await res.json();
@@ -486,6 +621,53 @@ async function syncPtzPanel(tile) {
     applyPtzSliders(panel, data);
   } catch (err) {
     statusEl.textContent = String(err.message || err);
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitPtzIdle(camId, want = {}) {
+  const started = Date.now();
+  let sawMove = false;
+  let idleHits = 0;
+  let lastZoom;
+  let stablePos = 0;
+  while (Date.now() - started < 20_000) {
+    let moving = false;
+    try {
+      const res = await fetch(`/api/cameras/${encodeURIComponent(camId)}/ptz/progress`);
+      const data = await res.json().catch(() => ({}));
+      moving = Boolean(res.ok && data.isctl);
+    } catch {
+      moving = false;
+    }
+    if (moving) {
+      sawMove = true;
+      idleHits = 0;
+      stablePos = 0;
+    } else if (sawMove) {
+      idleHits += 1;
+      if (idleHits >= 2 && Date.now() - started > 400) break;
+    } else if (want.zoom_slider != null && Date.now() - started > 400) {
+      try {
+        const res = await fetch(`/api/cameras/${encodeURIComponent(camId)}/ptz`);
+        const data = await res.json();
+        const z = Number(data.zoom_slider);
+        if (Number.isFinite(z)) {
+          if (z === lastZoom) stablePos += 1;
+          else {
+            lastZoom = z;
+            stablePos = 0;
+          }
+          if (z === Number(want.zoom_slider) && stablePos >= 1) break;
+        }
+      } catch {
+        if (Date.now() - started > 1500) break;
+      }
+    }
+    await sleep(120);
   }
 }
 
@@ -550,6 +732,14 @@ function makePtzPanel(cam, tile) {
       slider.value = String(next);
       slider.dispatchEvent(new Event("change", { bubbles: true }));
     };
+    const blockIfBusy = (event) => {
+      if (!busy) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    slider.addEventListener("pointerdown", blockIfBusy);
+    slider.addEventListener("touchstart", blockIfBusy, { passive: false });
+    slider.addEventListener("keydown", blockIfBusy);
     minus.addEventListener("click", (event) => nudge(-1, event));
     plus.addEventListener("click", (event) => nudge(1, event));
     controls.append(minus, slider, plus);
@@ -584,7 +774,13 @@ function makePtzPanel(cam, tile) {
   const setBusy = (on) => {
     busy = on;
     panel.dataset.busy = on ? "1" : "0";
-    for (const el of panel.querySelectorAll("button, input, select")) el.disabled = on;
+    panel.setAttribute("aria-busy", on ? "true" : "false");
+    panel.classList.toggle("is-busy", on);
+    head.textContent = on ? "PTZ · adjusting" : "PTZ";
+    for (const el of panel.querySelectorAll("button, input, select")) {
+      el.disabled = on;
+      if (el.type === "range") el.setAttribute("aria-disabled", on ? "true" : "false");
+    }
   };
 
   const run = async (fn) => {
@@ -593,6 +789,8 @@ function makePtzPanel(cam, tile) {
     try {
       const pos = await fn();
       applyPtzSliders(panel, pos);
+      await waitPtzIdle(cam.id, pos);
+      await syncPtzPanel(tile, { force: true });
     } catch (err) {
       statusEl.textContent = String(err.message || err);
     } finally {
@@ -1656,11 +1854,6 @@ function initEventStudio(tile, cam, ui) {
     add.type = "button";
     add.className = "event-draw-btn add";
     add.textContent = "Add";
-    const draw = document.createElement("button");
-    draw.type = "button";
-    draw.className = "event-draw-btn";
-    draw.textContent = state.drawMode ? "Cancel" : "Draw";
-    draw.classList.toggle("active", state.drawMode);
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "event-draw-btn";
@@ -1674,11 +1867,6 @@ function initEventStudio(tile, cam, ui) {
       event.stopPropagation();
       addCoverZone();
     });
-    draw.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      toggleCoverDraw();
-    });
     remove.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -1689,7 +1877,7 @@ function initEventStudio(tile, cam, ui) {
       event.stopPropagation();
       removeCoverZone(-1);
     });
-    ui.tools.append(add, draw, remove, removeAll);
+    ui.tools.append(add, remove, removeAll);
   }
 
   function emptyCoverIndex() {
@@ -1730,23 +1918,6 @@ function initEventStudio(tile, cam, ui) {
     renderTools();
     drawOverlay();
     saveCover();
-  }
-
-  function toggleCoverDraw() {
-    if (state.drawMode) {
-      cancelCoverDraw();
-      return;
-    }
-    const zones = state.cover?.zone_info || [];
-    let index = state.selectedZone;
-    if (!zones[index]?.zone_enable) {
-      index = emptyCoverIndex();
-      if (index < 0) {
-        setStatus("Zone limit reached");
-        return;
-      }
-    }
-    beginCoverDraw(index);
   }
 
   function cancelCoverDraw() {
@@ -2519,13 +2690,16 @@ function makeLiveTile(cam) {
   tile.setAttribute("aria-label", `${label} live view`);
   const stage = document.createElement("div");
   stage.className = "live-stage";
+  const canvas = document.createElement("canvas");
+  canvas.className = "live-feed";
   const img = document.createElement("img");
   img.alt = label;
-  img.decoding = "async";
+  img.className = "live-probe";
   img.dataset.stream = `/stream/${encodeURIComponent(cam.id)}`;
+  img._liveCanvas = canvas;
   const overlay = document.createElement("canvas");
   overlay.className = "event-overlay";
-  stage.append(img, overlay);
+  stage.append(canvas, img, overlay);
   const types = document.createElement("aside");
   types.className = "event-types";
   const main = document.createElement("div");
@@ -2605,7 +2779,7 @@ function setLivePager() {
 }
 
 function drawLiveWindows() {
-  for (const img of liveDash.querySelectorAll("img")) img.removeAttribute("src");
+  for (const img of liveDash.querySelectorAll("img")) stopLiveJpeg(img);
   setLivePager();
   const pageCams = liveCameras.slice(liveDashPage * LIVE_PAGE_SIZE, liveDashPage * LIVE_PAGE_SIZE + LIVE_PAGE_SIZE);
   const numWindows = pageCams.length;
@@ -2614,13 +2788,13 @@ function drawLiveWindows() {
   liveDash.style.setProperty("--live-count", String(cols));
   if (numWindows === 0) {
     liveDash.replaceChildren();
+    syncLiveHubs();
     return;
   }
   const frag = document.createDocumentFragment();
   for (const cam of pageCams) frag.append(makeLiveTile(cam));
   liveDash.replaceChildren(frag);
-  const imgs = liveDash.querySelectorAll(".live-stage > img");
-  for (const img of imgs) img.src = img.dataset.stream;
+  startLivePageStreams();
 }
 
 async function loadLiveDash({ goToLast = false } = {}) {
@@ -2808,13 +2982,6 @@ function facePlayWindow(filename, fallbackStart, fallbackEnd) {
     start: cameraStamp(startMs),
     end: cameraStamp(startMs + 5 * 60 * 1000),
   };
-}
-
-function concatBytes(a, b) {
-  const out = new Uint8Array(a.length + b.length);
-  out.set(a, 0);
-  out.set(b, a.length);
-  return out;
 }
 
 async function startPcmAudio(pathAndQuery) {

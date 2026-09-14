@@ -3,7 +3,6 @@ import { assignGroupsToFaces, groupIdsForUuids, groupMap, recentGroupStats } fro
 
 const MAX_PAGE = 40;
 
-// Honeywell Search codes — every field starts at 0 (same as their web request).
 const GENDER = { male: 0, female: 1 };
 const AGE = { under_18: 0, "18_25": 1, "26_30": 2, "31_35": 3, "36_40": 4, "41_50": 5, over_50: 6 };
 const MASK = { unmasked: 0, masked: 1 };

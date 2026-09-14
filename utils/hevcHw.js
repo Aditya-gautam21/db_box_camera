@@ -51,14 +51,6 @@ async function ffmpegText(args, timeoutMs = 4000) {
   return err;
 }
 
-async function vaapiOpens(device) {
-  const err = await ffmpegText(
-    ["-loglevel", "error", "-init_hw_device", `vaapi=va:${device}`, "-f", "lavfi", "-i", "nullsrc=s=16x16:d=0.05", "-f", "null", "-"],
-    4000,
-  );
-  return !/failed|error/i.test(err);
-}
-
 async function candidates() {
   const [acc, dec] = await Promise.all([
     ffmpegText(["-hwaccels"]),
@@ -68,7 +60,7 @@ async function candidates() {
   if (/hevc_v4l2m2m/.test(dec)) list.push({ kind: "v4l2m2m" });
   if (/\bvaapi\b/.test(acc)) {
     for (const device of RENDER_NODES) {
-      if (await readable(device) && await vaapiOpens(device)) {
+      if (await readable(device)) {
         list.push({ kind: "vaapi", device });
         break;
       }

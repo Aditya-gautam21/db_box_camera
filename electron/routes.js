@@ -13,7 +13,7 @@ import { playbackUri, saveClip } from "../utils/clips.js";
 import { listSnappedFaces, getSnapJpeg } from "../utils/fetchFaces.js";
 import { saveLineCross, clearLineCross } from "../utils/lineCross.js";
 import { liveDecodeMode } from "../utils/hevcHw.js";
-import { audioArgs, clipVideoArgs, liveVideoArgs } from "../utils/livestream.js";
+import { audioArgs, clipVideoArgs, liveVideoArgs, liveHubResponse, startLiveHub, retainLiveHubs } from "../utils/livestream.js";
 import {
   listGroups,
   addGroup,
@@ -44,6 +44,7 @@ import {
 import {
   detectPtz,
   getPtzState,
+  getPtzProgress,
   setZoom,
   setFocus,
   autoFocus,
@@ -224,13 +225,13 @@ async function handleMedia(request, url, pathname) {
     if (!cam) return text("unknown camera", 404);
     const rtsp = getRtspUrl(cam, 0);
     const { hw } = await liveDecodeMode();
-    return ffmpegResponse(liveVideoArgs(rtsp, hw), MJPEG, request);
+    return liveHubResponse(`v:${cam.id}`, liveVideoArgs(rtsp, hw), MJPEG, request);
   }
   const audioCam = match(pathname, "/stream-audio/:cam");
   if (audioCam) {
     const cam = await getCamera(audioCam.cam);
     if (!cam) return text("unknown camera", 404);
-    return ffmpegResponse(audioArgs(getRtspUrl(cam, 1), { sampleRate: sampleRate(url) }), PCM, request);
+    return ffmpegResponse(audioArgs(getRtspUrl(cam, 0), { sampleRate: sampleRate(url) }), PCM, request);
   }
   if (pathname === "/clip-stream" || pathname === "/clip-audio") {
     const clip = await clipPlayback(url);
@@ -278,6 +279,21 @@ async function handleApi(request, url, pathname) {
   if (method === "GET" && pathname === "/api/cameras") {
     return json(publicCameras(await ensurePtzFlags(await loadCameras())));
   }
+  if (method === "POST" && pathname === "/api/live/start") {
+    const body = await bodyJson(request);
+    const ids = Array.isArray(body.cams) ? body.cams.map(String) : [];
+    const { hw } = await liveDecodeMode();
+    const keys = [];
+    await Promise.all(ids.map(async (id) => {
+      const cam = await getCamera(id);
+      if (!cam) return;
+      const key = `v:${cam.id}`;
+      keys.push(key);
+      startLiveHub(key, liveVideoArgs(getRtspUrl(cam, 0), hw));
+    }));
+    retainLiveHubs(keys);
+    return json({ ok: true });
+  }
   if (method === "POST" && pathname === "/api/cameras") {
     const body = await bodyJson(request);
     const name = String(body.name || "").trim();
@@ -302,6 +318,8 @@ async function handleApi(request, url, pathname) {
 
   m = p("/api/cameras/:id/ptz");
   if (m && method === "GET") return json(await getPtzState(m.id));
+  m = p("/api/cameras/:id/ptz/progress");
+  if (m && method === "GET") return json(await getPtzProgress(m.id));
   m = p("/api/cameras/:id/ptz/zoom");
   if (m && method === "POST") {
     const body = await bodyJson(request);

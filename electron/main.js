@@ -4,6 +4,11 @@ import path from "node:path";
 import { handleRequest, ROOT } from "./routes.js";
 import { startLiveDecodeProbe } from "../utils/hevcHw.js";
 
+app.commandLine.appendSwitch(
+  "disable-features",
+  "VaapiVideoDecoder,VaapiVideoEncode,VaapiVideoDecoderLinuxGL,AcceleratedVideoDecodeLinuxGL",
+);
+
 protocol.registerSchemesAsPrivileged([
   {
     scheme: "app",
