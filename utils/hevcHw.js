@@ -163,8 +163,8 @@ export function liveHwArgs(hw) {
 }
 
 export function liveHwFilter(hw) {
-  // Keep 1080p. Download DRM/VAAPI frames before fps so decoder buffers return.
-  const out = "fps=12";
+  // Decode stays 1080p. JPEG is 1280 so the CPU pool is ~0.44× a 1080p YUV frame.
+  const out = "scale=1280:-2:flags=fast_bilinear,fps=12";
   if (hw?.kind === "vaapi") return `hwdownload,format=nv12,${out}`;
   if (hw?.kind === "cuda") return `hwdownload,format=nv12,${out}`;
   if (hw?.kind === "drm" && hw.prime !== false) return `hwdownload,format=yuv420p,${out}`;
